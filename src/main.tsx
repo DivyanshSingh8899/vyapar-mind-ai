@@ -1,4 +1,9 @@
-import '@vly-ai/integrations';
+// Loaded lazily + defensively: this template integration performs side
+// effects at import time; if it fails in a sandboxed iframe it must not take
+// the whole app down with it (white screen).
+import("@vly-ai/integrations").catch((e) =>
+  console.warn("[vly-integrations] skipped:", e?.message ?? e),
+);
 import { Toaster } from "@/components/ui/sonner";
 import { RequireAuth } from "@/components/RequireAuth";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
