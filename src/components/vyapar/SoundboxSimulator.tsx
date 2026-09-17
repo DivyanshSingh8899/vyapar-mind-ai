@@ -136,8 +136,17 @@ export function SoundboxSimulator({
 
         <p className={cn("mt-4 text-sm font-semibold", meta.tint)}>{meta.label}</p>
         <p className="mt-0.5 h-4 max-w-md truncate text-xs text-muted-foreground">
-          {partial || (sttSupported ? "Tap the orb and speak — tap again to cancel" : "Type below — voice input unavailable in this browser")}
+          {partial ||
+            (sttSupported
+              ? "Tap the orb, allow the microphone, then speak"
+              : "Type below — voice input unavailable in this browser")}
         </p>
+        {sttSupported && state === "IDLE" && (
+          <p className="mt-1 max-w-sm text-center text-[10px] leading-4 text-slate-400">
+            Works best in Chrome/Edge. If the mic is blocked inside the preview, open the preview in a
+            separate browser tab and allow microphone access.
+          </p>
+        )}
       </div>
 
       {/* Sensitive-action approval strip */}

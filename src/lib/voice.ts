@@ -144,3 +144,87 @@ export function voiceProviderLabel(hasSarvam: boolean): string {
   if (isSttSupported() && isTtsSupported()) return "Browser voice (Web Speech API)";
   return "Text fallback";
 }
+
+// ───────────────── Sarvam path: MediaRecorder capture → secure backend ─────
+
+export interface RecorderHandle {
+  stop: () => Promise<{ base64: string; mime: string } | null>;
+}
+
+export function supportsMediaRecorder(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof MediaRecorder !== "undefined" &&
+    Boolean(navigator.mediaDevices?.getUserMedia)
+  );
+}
+
+/**
+ * Start capturing microphone audio for server-side STT.
+ * Returns null if the mic is unavailable/permission denied.
+ */
+export async function startRecorder(): Promise<RecorderHandle | null> {
+  if (!supportsMediaRecorder()) return null;
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    console.warn("[voice] mic permission denied/unavailable:", e);
+    return null;
+  }
+  const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  const chunks: BlobPart[] = [];
+  rec.ondataavailable = (e) => {
+    if (e.data.size > 0) chunks.push(e.data);
+  };
+  rec.start(250);
+
+  return {
+    stop: () =>
+      new Promise((resolve) => {
+        rec.onstop = () => {
+          stream.getTracks().forEach((t) => t.stop());
+          const type = rec.mimeType || mime || "audio/webm";
+          const blob = new Blob(chunks, { type });
+          if (!blob.size) return resolve(null);
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = String(reader.result ?? "");
+            const base64 = result.slice(result.indexOf(",") + 1);
+            resolve({ base64, mime: type });
+          };
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(blob);
+        };
+        try {
+          rec.stop();
+        } catch {
+          resolve(null);
+        }
+      }),
+  };
+}
+
+/** Human-friendly mic errors for the UI. */
+export async function micPermissionState(): Promise<"granted" | "denied" | "prompt" | "unknown"> {
+  try {
+    const p = await navigator.permissions?.query({ name: "microphone" as PermissionName });
+    return (p?.state as "granted" | "denied" | "prompt") ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** Play base64 audio (Sarvam TTS result) through the speakers. */
+export function playBase64Audio(base64: string, onEnded?: () => void): boolean {
+  try {
+    const audio = new Audio(`data:audio/wav;base64,${base64}`);
+    if (onEnded) audio.onended = () => onEnded();
+    audio.onerror = () => onEnded?.();
+    void audio.play();
+    return true;
+  } catch {
+    return false;
+  }
+}

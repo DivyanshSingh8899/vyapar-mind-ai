@@ -1,5 +1,13 @@
 import { v } from "convex/values";
-import { action } from "./_generated/server";
+import { action, query } from "./_generated/server";
+
+/** Which voice providers the client should use (checked server-side, never leaks keys). */
+export const getVoiceConfig = query({
+  args: {},
+  handler: async () => ({
+    sarvamAvailable: Boolean(process.env.SARVAM_AI_API_KEY),
+  }),
+});
 
 /**
  * Sarvam AI voice adapter (secure backend endpoints).
