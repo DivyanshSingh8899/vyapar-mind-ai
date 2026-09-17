@@ -1,11 +1,16 @@
 import { api } from "@/convex/_generated/api";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   isSttSupported,
+  micPermissionState,
+  playBase64Audio,
   speak,
   startListening,
+  startRecorder,
   stopSpeaking,
+  supportsMediaRecorder,
+  type RecorderHandle,
   type SttHandle,
 } from "@/lib/voice";
 
@@ -66,15 +71,21 @@ export function useVyaparAgent() {
   const [lastApproved, setLastApproved] = useState<string | null>(null);
 
   const sttRef = useRef<SttHandle | null>(null);
+  const recRef = useRef<RecorderHandle | null>(null);
   const resumeRef = useRef<SoundboxState>("IDLE");
   const stateRef = useRef<SoundboxState>("IDLE");
   stateRef.current = state;
 
   // Server-side truth for pending sensitive actions (provides the DB id).
   const serverPending = useQuery(api.vyapar.getPendingAction);
+  // Voice provider config: does the backend have a Sarvam key configured?
+  const voiceConfig = useQuery(api.voice.getVoiceConfig);
+  const useSarvam = Boolean(voiceConfig?.sarvamAvailable);
   const serverPendingRef = useRef(serverPending);
   serverPendingRef.current = serverPending;
 
+  const sarvamSttAction = useAction(api.voice.sarvamStt);
+  const sarvamTtsAction = useAction(api.voice.sarvamTts);
   const ensureMerchant = useMutation(api.vyapar.ensureDemoMerchant);
   const sendTurn = useMutation(api.vyapar.agentTurn);
   const simPayment = useMutation(api.vyapar.simulatePayment);
@@ -156,11 +167,26 @@ export function useVyaparAgent() {
           setState("AUTHENTICATION_REQUIRED");
         } else {
           setState("RESPONDING");
-          speak(res.response, "hi-IN", () => setState("IDLE"));
-          // Safety: never stick in RESPONDING if TTS fails silently.
-          window.setTimeout(() => {
-            setState((s) => (s === "RESPONDING" ? "IDLE" : s));
-          }, Math.min(15000, 4000 + res.response.length * 60));
+          let settled = false;
+          const done = () => {
+            if (settled) return;
+            settled = true;
+            setState("IDLE");
+          };
+          if (useSarvam) {
+            // Try premium Sarvam TTS first; silently fall back to browser TTS.
+            try {
+              const tts = await sarvamTtsAction({ text: res.response, language: "hi-IN" });
+              if (tts.available && tts.audioBase64 && playBase64Audio(tts.audioBase64, done)) {
+                window.setTimeout(done, 20000);
+                return;
+              }
+            } catch {
+              /* fall through to browser TTS */
+            }
+          }
+          speak(res.response, "hi-IN", done);
+          window.setTimeout(done, Math.min(15000, 4000 + res.response.length * 60));
         }
       } catch {
         setState("ERROR");
@@ -180,42 +206,87 @@ export function useVyaparAgent() {
   );
 
   const startVoice = useCallback(() => {
-    if (stateRef.current === "PAYMENT_INTERRUPT") return; // payment priority
-    if (!isSttSupported()) {
-      setError("Voice input is not supported in this browser — type instead.");
-      return;
-    }
-    stopSpeaking();
-    setState("LISTENING");
-    const handle = startListening("hi-IN", {
-      onPartial: (t) => setPartial(t),
-      onFinal: (t) => {
-        sttRef.current = null;
-        runTurn(t, "voice");
-      },
-      onError: (code, message) => {
-        sttRef.current = null;
-        setError(`${message} (${code})`);
-        setState("IDLE");
-      },
-      onEnd: () => {
-        if (sttRef.current) {
-          sttRef.current = null;
-          if (stateRef.current === "LISTENING") setState("IDLE");
+    void (async () => {
+      if (stateRef.current === "PAYMENT_INTERRUPT") return; // payment priority
+      if (useSarvam && supportsMediaRecorder()) {
+        // ── Sarvam path: record → secure backend STT (never a fake transcript) ──
+        stopSpeaking();
+        if (recRef.current) {
+          // Second tap: stop capture → Sarvam STT → run the agent.
+          const rec = recRef.current;
+          recRef.current = null;
+          setPartial("");
+          setState("PROCESSING");
+          const audio = await rec.stop();
+          if (!audio?.base64) {
+            setError("Recording failed — please try again or type instead.");
+            setState("IDLE");
+            return;
+          }
+          try {
+            const stt = await sarvamSttAction({ audioBase64: audio.base64, language: "hi" });
+            if (!stt.available || !stt.text.trim()) {
+              setError(stt.note || "Transcription unavailable — type instead.");
+              setState("IDLE");
+              return;
+            }
+            await runTurn(stt.text, "voice");
+          } catch {
+            setError("Sarvam STT call failed — check the API key, or type instead.");
+            setState("IDLE");
+          }
+          return;
         }
-      },
-    });
-    if (!handle) {
-      setError("Could not start the microphone.");
-      setState("IDLE");
-      return;
-    }
-    sttRef.current = handle;
-  }, [runTurn]);
+        setState("LISTENING");
+        const rec = await startRecorder();
+        if (!rec) {
+          setError("Microphone blocked or unavailable. Allow mic access in the browser, or type instead.");
+          setState("IDLE");
+        } else {
+          recRef.current = rec;
+          setPartial("(recording — tap again to send)");
+        }
+        return;
+      }
+      // ── Browser path: Web Speech API (live transcript) ──
+      if (!isSttSupported()) {
+        setError("Voice input is not supported in this browser — type instead.");
+        return;
+      }
+      stopSpeaking();
+      setState("LISTENING");
+      const handle = startListening("hi-IN", {
+        onPartial: (t) => setPartial(t),
+        onFinal: (t) => {
+          sttRef.current = null;
+          runTurn(t, "voice");
+        },
+        onError: (code, message) => {
+          sttRef.current = null;
+          setError(`${message} (${code})`);
+          setState("IDLE");
+        },
+        onEnd: () => {
+          if (sttRef.current) {
+            sttRef.current = null;
+            if (stateRef.current === "LISTENING") setState("IDLE");
+          }
+        },
+      });
+      if (!handle) {
+        setError("Could not start the microphone. Check browser mic permissions.");
+        setState("IDLE");
+        return;
+      }
+      sttRef.current = handle;
+    })();
+  }, [runTurn, useSarvam]);
 
   const cancelListening = useCallback(() => {
     sttRef.current?.stop();
     sttRef.current = null;
+    void recRef.current?.stop();
+    recRef.current = null;
     setPartial("");
     setState("IDLE");
   }, []);
