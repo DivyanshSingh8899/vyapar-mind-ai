@@ -120,13 +120,15 @@ function extractCustomerName(t: string): string | null {
 }
 
 function extractProduct(t: string): string | null {
-  const m = t.match(/(?:ka|ki|of|kitna|kitne)\s+([a-z][a-z0-9 ()\-]*?)\s*(?:ka|ki|stock|hai|left|bacha|$)/);
-  if (m) {
-    const cand = m[1].trim();
-    if (cand && !/^(kitna|kitne|kya|sab|kaisa)$/.test(cand)) return cand;
-  }
+  // Known catalogue keywords win first (most reliable path).
   const known = ["milk", "bread", "egg", "rice", "atta", "wheat", "dal", "oil", "sugar", "tea", "biscuit", "detergent", "soap", "shampoo", "butter", "curd", "flour"];
   for (const k of known) if (t.includes(k)) return k;
+  const m = t.match(/(?:ka|ki|of|kitna|kitne)\s+([a-z][a-z0-9 ()\-]*?)\s*(?:ka|ki|kitna|kitne|stock|hai|left|bacha|$)/);
+  if (m) {
+    const cand = m[1].trim();
+    const stop = /^(kitna|kitne|kya|sab|kaisa|stock|saman|maal|udhaar|udhar|offer)$/;
+    if (cand && !stop.test(cand)) return cand;
+  }
   return null;
 }
 

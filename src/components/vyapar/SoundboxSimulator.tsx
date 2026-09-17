@@ -31,8 +31,7 @@ const STATE_META: Record<
 export function SoundboxSimulator({
   state,
   partial,
-  onTalkPress,
-  onTalkRelease,
+  onToggleTalk,
   onCancel,
   sttSupported,
   pending,
@@ -43,8 +42,7 @@ export function SoundboxSimulator({
 }: {
   state: SoundboxState;
   partial: string;
-  onTalkPress: () => void;
-  onTalkRelease: () => void;
+  onToggleTalk: () => void;
   onCancel: () => void;
   sttSupported: boolean;
   pending: PendingActionView | null;
@@ -101,17 +99,7 @@ export function SoundboxSimulator({
           type="button"
           aria-label={sttSupported ? "Talk to Vyapar-Mind" : "Voice not supported, use text input"}
           disabled={busy}
-          onMouseDown={onTalkPress}
-          onMouseUp={onTalkRelease}
-          onMouseLeave={isListening ? onTalkRelease : undefined}
-          onTouchStart={(e) => {
-            e.preventDefault();
-            onTalkPress();
-          }}
-          onTouchEnd={(e) => {
-            e.preventDefault();
-            onTalkRelease();
-          }}
+          onClick={isListening ? onCancel : onToggleTalk}
           className={cn(
             "vm-orb relative grid size-40 place-items-center rounded-full text-white shadow-xl outline-none sm:size-44",
             "ring-4 ring-offset-4 ring-offset-white/40 transition-all duration-300",
@@ -148,7 +136,7 @@ export function SoundboxSimulator({
 
         <p className={cn("mt-4 text-sm font-semibold", meta.tint)}>{meta.label}</p>
         <p className="mt-0.5 h-4 max-w-md truncate text-xs text-muted-foreground">
-          {partial || (sttSupported ? "Tap and hold the orb, then speak" : "Type below — voice input unavailable in this browser")}
+          {partial || (sttSupported ? "Tap the orb and speak — tap again to cancel" : "Type below — voice input unavailable in this browser")}
         </p>
       </div>
 

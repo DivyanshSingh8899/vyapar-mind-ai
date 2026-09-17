@@ -157,6 +157,10 @@ export function useVyaparAgent() {
         } else {
           setState("RESPONDING");
           speak(res.response, "hi-IN", () => setState("IDLE"));
+          // Safety: never stick in RESPONDING if TTS fails silently.
+          window.setTimeout(() => {
+            setState((s) => (s === "RESPONDING" ? "IDLE" : s));
+          }, Math.min(15000, 4000 + res.response.length * 60));
         }
       } catch {
         setState("ERROR");
