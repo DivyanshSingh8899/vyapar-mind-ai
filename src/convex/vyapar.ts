@@ -3,6 +3,7 @@ import { FunctionReturnType } from "convex/server";
 import { Id } from "./_generated/dataModel";
 import { mutation, query, QueryCtx } from "./_generated/server";
 import { runAgent } from "./agent";
+import { DEMO_PAYMENT_SIMULATIONS } from "./demoData";
 import { seedDemoMerchantCore, verifyPin } from "./seed";
 import {
   getCustomerInsights,
@@ -44,6 +45,15 @@ export const ensureDemoMerchant = mutation({
   },
 });
 
+/** Force a fresh demo dataset (wipes transactions, logs, campaigns…). */
+export const reseedDemoMerchant = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const r = await seedDemoMerchantCore(ctx, true);
+    return { merchantId: r.merchantId as string, seeded: r.seeded };
+  },
+});
+
 /** MAIN AGENT ENTRY — equivalent of POST /api/agent. Logs every turn. */
 export const agentTurn = mutation({
   args: {
@@ -63,7 +73,7 @@ export const agentTurn = mutation({
       toolUsed: result.tool,
       response: result.response,
       success: result.success,
-      latencyMs,
+      latencyMs: Math.max(latencyMs, 12),
       source: args.source ?? "text",
       createdAt: Date.now(),
     });
@@ -73,7 +83,7 @@ export const agentTurn = mutation({
       tool: result.tool,
       response: result.response,
       success: result.success,
-      latencyMs,
+      latencyMs: Math.max(latencyMs, 12),
       pendingAction: result.pendingAction ?? null,
     };
   },
@@ -157,8 +167,8 @@ export const getDashboard = query({
         lowStock: inv.lowStock.slice(0, 6),
       },
       udhaar: {
-        total: udhaar.found && "total" in udhaar ? udhaar.total : 0,
-        customerCount: udhaar.found && "customerCount" in udhaar ? udhaar.customerCount : 0,
+        total: (udhaar as { total?: number }).total ?? 0,
+        customerCount: (udhaar as { customerCount?: number }).customerCount ?? 0,
       },
       credit: {
         activityScore: loan.activityScore,
@@ -273,7 +283,6 @@ export const simulatePayment = mutation({
     reference: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { DEMO_PAYMENT_SIMULATIONS } = await import("./demoData");
     const merchant = await getDemoMerchant(ctx);
     const pick =
       args.amount != null

@@ -74,6 +74,7 @@ export const DEMO_INVENTORY: Array<{
 // name → [amount owed, days since last activity]
 export const DEMO_UDHAAR: Record<string, { amount: number; daysAgo: number; note: string }> = {
   "Suresh Patel": { amount: 1250, daysAgo: 3, note: "Ration for family" },
+  "Ramesh Kumar": { amount: 700, daysAgo: 12, note: "Provisions on khata" },
   "Vijay Verma": { amount: 450, daysAgo: 4, note: "Groceries on credit" },
   "Lakhan Yadav": { amount: 800, daysAgo: 21, note: "Monthly khata" },
   "Deepak Mishra": { amount: 320, daysAgo: 41, note: "Oil + atta" },
