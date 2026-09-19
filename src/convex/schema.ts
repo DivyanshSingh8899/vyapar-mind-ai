@@ -92,7 +92,7 @@ const schema = defineSchema(
       targetCount: v.number(),
       offer: v.string(),
       status: v.string(), // "created" | "delivering" | "completed"
-      channel: v.string(), // "simulated_whatsapp"
+      channel: v.string(), // "simulated_whatsapp" | "simulated_whatsapp_via_n8n (n/n)"
       customerNames: v.array(v.string()),
       createdAt: v.number(),
     }).index("by_merchant", ["merchantId"]),

@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import { FunctionReturnType } from "convex/server";
 import { Id } from "./_generated/dataModel";
-import { mutation, query, QueryCtx } from "./_generated/server";
+import { internalMutation, mutation, query, QueryCtx } from "./_generated/server";
+import { api } from "./_generated/api";
 import { runAgent } from "./agent";
 import { isLang } from "./langs";
 import {
@@ -402,6 +403,16 @@ export const approvePendingAction = mutation({
       await ctx.db.patch(pend._id, { status: "approved" });
       message = APPROVED_CAMPAIGN_OK[lang](names.length);
       detail = APPROVED_CAMPAIGN_DETAIL[lang](String(campaignId));
+      // Hand delivery off to the n8n workflow (if N8N_WEBHOOK_URL is set).
+      // Fire-and-forget: a slow/failing webhook must never block or fail the
+      // merchant's PIN approval; the /n8n/callback route converges state.
+      await ctx.scheduler.runAfter(0, api.n8n.dispatchCampaign, {
+        campaignId: String(campaignId),
+        merchantCode: merchant.merchantCode,
+        businessName: merchant.businessName,
+        offer: String(payload.offer ?? "₹50 coupon"),
+        customerNames: names,
+      });
     } else {
       return { ok: false as const, message: ACTION_EXPIRED[lang]() };
     }
@@ -420,6 +431,34 @@ export const approvePendingAction = mutation({
     });
 
     return { ok: true as const, message, detail };
+  },
+});
+
+/**
+ * Delivery-state convergence: the n8n callback action calls this internal
+ * mutation to flip the campaign to "completed" once the workflow reports it
+ * finished fanning out the messages.
+ */
+export const setCampaignDelivered = internalMutation({
+  args: { campaignId: v.id("campaigns"), deliveredCount: v.number() },
+  handler: async (ctx, args) => {
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign) return;
+    await ctx.db.patch(args.campaignId, {
+      status: "completed",
+      channel: `simulated_whatsapp_via_n8n (${args.deliveredCount}/${campaign.customerNames.length})`,
+    });
+    await ctx.db.insert("agentLogs", {
+      merchantId: campaign.merchantId,
+      userInput: `[n8n delivery] campaign ${String(args.campaignId)}`,
+      detectedIntent: "CAMPAIGN_DELIVERED",
+      toolUsed: "n8n_campaign_delivery",
+      response: `n8n workflow delivered ${args.deliveredCount}/${campaign.customerNames.length} messages (simulated channel).`,
+      success: true,
+      latencyMs: 0,
+      source: "n8n",
+      createdAt: Date.now(),
+    });
   },
 });
 
