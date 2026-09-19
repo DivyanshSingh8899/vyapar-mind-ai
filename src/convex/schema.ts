@@ -106,6 +106,19 @@ const schema = defineSchema(
       createdAt: v.number(),
     }).index("by_merchant", ["merchantId"]),
 
+    qrCodes: defineTable({
+      merchantId: v.id("merchants"),
+      razorpayQrId: v.string(),
+      amount: v.number(), // rupees, same unit as transactions
+      imageUrl: v.string(),
+      status: v.string(), // "pending" | "paid"
+      razorpayPaymentId: v.optional(v.string()),
+      createdAt: v.number(),
+      paidAt: v.optional(v.number()),
+    })
+      .index("by_qrId", ["razorpayQrId"])
+      .index("by_merchant", ["merchantId"]),
+
     agentLogs: defineTable({
       merchantId: v.id("merchants"),
       userInput: v.string(),

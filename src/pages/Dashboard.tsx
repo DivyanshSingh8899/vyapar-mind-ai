@@ -16,6 +16,7 @@ import { api } from "@/convex/_generated/api";
 import { useMutation, useQuery } from "convex/react";
 import { BellRing, CircleStop, LogOut, Radio, ShieldCheck, Sparkles } from "lucide-react";
 import { useState } from "react";
+import GenerateQr from "@/components/GenerateQr";
 import { useNavigate } from "react-router";
 
 export default function Dashboard() {
@@ -127,6 +128,8 @@ export default function Dashboard() {
         <Radio className="size-3.5 text-indigo-400" />
         Merchant ko dashboard kholne ki zaroorat nahi — bas boliye. Dashboard sirf backup hai.
       </p>
+
+      <GenerateQr />
 
       {/* ── Business panels ── */}
       {!data ? (
