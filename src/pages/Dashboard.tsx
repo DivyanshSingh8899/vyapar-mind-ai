@@ -10,14 +10,21 @@ import {
 } from "@/components/vyapar/BusinessPanels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/hooks/use-auth";
 import { useVyaparAgent } from "@/hooks/useVyaparAgent";
 import { api } from "@/convex/_generated/api";
+import { LANGS, LANG_CODES, type Lang } from "@/convex/langs";
 import { useMutation, useQuery } from "convex/react";
-import { BellRing, CircleStop, LogOut, Radio, ShieldCheck, Sparkles } from "lucide-react";
+import { BellRing, CircleStop, Languages, LogOut, Radio, ShieldCheck, Sparkles } from "lucide-react";
 import { useState } from "react";
-import GenerateQr from "@/components/GenerateQr";
 import { useNavigate } from "react-router";
+import { cn } from "@/lib/utils";
 
 export default function Dashboard() {
   const { user, signOut } = useAuth();
@@ -77,6 +84,33 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                className="gap-2 rounded-full border-white/70 bg-white/60 font-semibold"
+                title="Assistant language"
+              >
+                <Languages className="size-4 text-indigo-500" />
+                {LANGS[agent.lang].native}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="rounded-xl border-white/60 bg-white/95 backdrop-blur">
+              {LANG_CODES.map((code: Lang) => (
+                <DropdownMenuItem
+                  key={code}
+                  onClick={() => agent.setLang(code)}
+                  className={cn(
+                    "gap-2",
+                    agent.lang === code && "bg-indigo-50 font-semibold text-indigo-700",
+                  )}
+                >
+                  <span className="w-16">{LANGS[code].native}</span>
+                  <span className="text-xs text-muted-foreground">{LANGS[code].label}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             onClick={agent.simulatePayment}
             className="vm-orb border-0 gap-2 rounded-full px-4 font-bold text-white shadow-lg"
@@ -92,7 +126,7 @@ export default function Dashboard() {
 
       {/* ── Demo bar ── */}
       <div className="mt-4">
-        <DemoModeBar onRun={runDemo} activeId={activeDemo} />
+        <DemoModeBar onRun={runDemo} activeId={activeDemo} lang={agent.lang} />
       </div>
 
       {/* ── Soundbox + Conversation ── */}
@@ -103,6 +137,7 @@ export default function Dashboard() {
           sttSupported={agent.sttSupported}
           pending={agent.pending}
           businessName={data?.merchant.businessName ?? "Ramesh General Store"}
+          lang={agent.lang}
           lastApproved={agent.lastApproved}
           onToggleTalk={agent.startVoice}
           onCancel={agent.cancelListening}
@@ -128,8 +163,6 @@ export default function Dashboard() {
         <Radio className="size-3.5 text-indigo-400" />
         Merchant ko dashboard kholne ki zaroorat nahi — bas boliye. Dashboard sirf backup hai.
       </p>
-
-      <GenerateQr />
 
       {/* ── Business panels ── */}
       {!data ? (

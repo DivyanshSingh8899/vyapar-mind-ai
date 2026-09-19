@@ -92,7 +92,7 @@ const schema = defineSchema(
       targetCount: v.number(),
       offer: v.string(),
       status: v.string(), // "created" | "delivering" | "completed"
-      channel: v.string(), // "simulated_whatsapp"
+      channel: v.string(), // "simulated_whatsapp" | "simulated_whatsapp_via_n8n (n/n)"
       customerNames: v.array(v.string()),
       createdAt: v.number(),
     }).index("by_merchant", ["merchantId"]),
@@ -106,19 +106,6 @@ const schema = defineSchema(
       createdAt: v.number(),
     }).index("by_merchant", ["merchantId"]),
 
-    qrCodes: defineTable({
-      merchantId: v.id("merchants"),
-      razorpayQrId: v.string(),
-      amount: v.number(), // rupees, same unit as transactions
-      imageUrl: v.string(),
-      status: v.string(), // "pending" | "paid"
-      razorpayPaymentId: v.optional(v.string()),
-      createdAt: v.number(),
-      paidAt: v.optional(v.number()),
-    })
-      .index("by_qrId", ["razorpayQrId"])
-      .index("by_merchant", ["merchantId"]),
-
     agentLogs: defineTable({
       merchantId: v.id("merchants"),
       userInput: v.string(),
@@ -128,6 +115,7 @@ const schema = defineSchema(
       success: v.boolean(),
       latencyMs: v.number(),
       source: v.string(), // "voice" | "text" | "demo"
+      lang: v.optional(v.string()), // "hi" | "en" | "ta" | "te" | "kn"
       createdAt: v.number(),
     }).index("by_merchant_time", ["merchantId", "createdAt"]),
 

@@ -1,0 +1,82 @@
+{
+  "name": "Vyapar-Mind Campaign Delivery",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vyapar-campaign",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0000-4000-8000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-260, 0],
+      "webhookId": "b1b2c3d4-0000-4000-8000-000000000002"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Vyapar-Mind campaign delivery — one item per customer.\n// Replace or extend this node with real send nodes (WhatsApp, Email, SMS, AI\n// personalization, retries, ...) later. The final HTTP Request node only needs\n// the webhook payload to call back Convex.\nconst payload = $input.first().json.body || {};\nconst customers = Array.isArray(payload.customers) ? payload.customers : [];\nconst businessName = payload.businessName || \"Aapki dukaan\";\nconst offer = payload.offer || \"₹50 coupon\";\nreturn customers.map((c) => ({\n  json: {\n    campaignId: payload.campaignId,\n    customerName: c.name,\n    simulatedMessage: `Namaste ${c.name}! ${businessName} se special offer: ${offer}. Aaj hi visit karein! (Vyapar-Mind demo)`,\n  },\n}));"
+      },
+      "id": "c1b2c3d4-0000-4000-8000-000000000003",
+      "name": "Fan out messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://silent-husky-948.convex.site/n8n/callback",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-vyapar-secret",
+              "value": "REPLACE_WITH_YOUR_SHARED_SECRET"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ event: 'campaign.delivered', campaignId: $('Webhook').first().json.body.campaignId, delivered: $('Webhook').first().json.body.customers.length }) }}",
+        "options": {}
+      },
+      "id": "d1b2c3d4-0000-4000-8000-000000000004",
+      "name": "Send callback to Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0],
+      "executeOnce": true
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Fan out messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fan out messages": {
+      "main": [
+        [
+          {
+            "node": "Send callback to Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,39 +1,60 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api } from "./_generated/api";
 import { auth } from "./auth";
 
 const http = httpRouter();
+
 auth.addHttpRoutes(http);
 
-http.route({
-  path: "/razorpay/webhook",
-  method: "POST",
-  handler: httpAction(async (ctx, req) => {
-    const raw = await req.text();
-    const sig = req.headers.get("x-razorpay-signature") ?? "";
-    const key = await crypto.subtle.importKey(
-      "raw", new TextEncoder().encode(process.env.RZP_WEBHOOK_SECRET!),
-      { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
-    );
-    const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw));
-    const expected = Array.from(new Uint8Array(mac)).map((b) => b.toString(16).padStart(2, "0")).join("");
-    let diff = expected.length ^ sig.length;
-    for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ (sig.charCodeAt(i) || 0);
-    if (diff !== 0) return new Response("bad signature", { status: 400 });
-
-    const event = JSON.parse(raw);
-    if (event.event === "qr_code.credited") {
-      const pay = event.payload?.payment?.entity;
-      await ctx.runMutation(internal.razorpay.handleCredited, {
-        qrId: event.payload.qr_code.entity.id,
-        paymentId: pay.id,
-        amountPaise: pay.amount,
-        payer: pay.vpa ?? undefined,
+// ─────────────────────────────────────────────────────────────────────────────
+// n8n Cloud callback — the campaign-delivery workflow POSTs here when it has
+// finished fanning out the messages for an approved campaign.
+//
+// Contract (matches src/convex/n8n.ts):
+//   POST /n8n/callback
+//   headers: Content-Type: application/json, x-vyapar-secret: <N8N_SHARED_SECRET>
+//   body:    { "event": "campaign.delivered", "campaignId": "<convex id>",
+//              "delivered": <number of messages sent> }
+//   → 200 { ok: true } | 403 invalid secret | 404 unknown campaign | 500 error
+// ─────────────────────────────────────────────────────────────────────────────
+export const n8nCallback = httpAction(async (ctx, req) => {
+  try {
+    const body = (await req.json()) as {
+      event?: string;
+      campaignId?: string;
+      delivered?: number;
+    };
+    if (body.event !== "campaign.delivered" || !body.campaignId) {
+      return new Response(JSON.stringify({ ok: false, error: "Expected event=campaign.delivered with campaignId" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
       });
     }
-    return new Response("ok");
-  }),
+    const secret = req.headers.get("x-vyapar-secret");
+    const result: { ok: boolean; note: string } = await ctx.runAction(api.n8n.markCampaignDelivered, {
+      campaignId: body.campaignId,
+      secret: secret ?? undefined,
+      delivered: Number(body.delivered ?? 0),
+    });
+    if (!result.ok) {
+      return new Response(JSON.stringify(result), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ ok: false, error: err instanceof Error ? err.message : "callback failed" }),
+      { status: 500, headers: { "Content-Type": "application/json" } },
+    );
+  }
 });
+
+http.route({ path: "/n8n/callback", method: "POST", handler: n8nCallback });
 
 export default http;

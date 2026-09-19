@@ -1,31 +1,38 @@
 import { v } from "convex/values";
 import { action, query } from "./_generated/server";
 
-/** Which voice providers the client should use (checked server-side, never leaks keys). */
+/**
+ * Which voice providers the client should use (checked server-side, keys never
+ * reach the frontend). Supports either a single combined key (SARVAM_AI_API_KEY)
+ * or two separate per-direction keys:
+ *   SARVAM_STT_API_KEY  → speech-to-text (saarika)
+ *   SARVAM_TTS_API_KEY  → text-to-speech (bulbul)
+ */
 export const getVoiceConfig = query({
   args: {},
   handler: async () => ({
-    sarvamAvailable: Boolean(process.env.SARVAM_AI_API_KEY),
+    sarvamSttAvailable: Boolean(process.env.SARVAM_STT_API_KEY ?? process.env.SARVAM_AI_API_KEY),
+    sarvamTtsAvailable: Boolean(process.env.SARVAM_TTS_API_KEY ?? process.env.SARVAM_AI_API_KEY),
   }),
 });
 
 /**
  * Sarvam AI voice adapter (secure backend endpoints).
  *
- * If SARVAM_AI_API_KEY is configured, STT/TTS are proxied through these Convex
- * actions so the key never reaches the frontend. If not configured, they
- * return a clean "unavailable" response - we NEVER fake a transcription.
+ * Keys are read server-side only. If a direction's key is not configured, that
+ * action returns a clean "unavailable" response and the client falls back
+ * (Web Speech API / text input) — we NEVER fake a transcription or audio.
  */
 
 export const sarvamStt = action({
   args: { audioBase64: v.string(), language: v.optional(v.string()) },
   handler: async (_ctx, args) => {
-    const apiKey = process.env.SARVAM_AI_API_KEY;
+    const apiKey = process.env.SARVAM_STT_API_KEY ?? process.env.SARVAM_AI_API_KEY;
     if (!apiKey) {
       return {
         available: false as const,
         text: "",
-        note: "SARVAM_AI_API_KEY not configured - text fallback active. No simulated transcript.",
+        note: "SARVAM_STT_API_KEY not configured - text fallback active. No simulated transcript.",
       };
     }
 
@@ -53,12 +60,12 @@ export const sarvamStt = action({
 export const sarvamTts = action({
   args: { text: v.string(), language: v.optional(v.string()) },
   handler: async (_ctx, args) => {
-    const apiKey = process.env.SARVAM_AI_API_KEY;
+    const apiKey = process.env.SARVAM_TTS_API_KEY ?? process.env.SARVAM_AI_API_KEY;
     if (!apiKey) {
       return {
         available: false as const,
         audioBase64: "",
-        note: "SARVAM_AI_API_KEY not configured - using Web Speech API fallback.",
+        note: "SARVAM_TTS_API_KEY not configured - using Web Speech API fallback.",
       };
     }
 
@@ -68,8 +75,8 @@ export const sarvamTts = action({
       body: JSON.stringify({
         inputs: [args.text],
         target_language_code: args.language ?? "hi-IN",
-        speaker: "anushka",
-        model: "bulbul:v2",
+        speaker: "ritu",
+        model: "bulbul:v3",
       }),
     });
     if (!res.ok) {

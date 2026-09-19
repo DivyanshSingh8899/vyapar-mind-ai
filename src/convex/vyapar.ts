@@ -1,8 +1,21 @@
 import { v } from "convex/values";
 import { FunctionReturnType } from "convex/server";
 import { Id } from "./_generated/dataModel";
-import { mutation, query, QueryCtx } from "./_generated/server";
+import { internalMutation, mutation, query, QueryCtx } from "./_generated/server";
+import { api } from "./_generated/api";
 import { runAgent } from "./agent";
+import { isLang } from "./langs";
+import {
+  ACTION_EXPIRED,
+  APPROVED_CAMPAIGN_DETAIL,
+  APPROVED_CAMPAIGN_OK,
+  APPROVED_DETAIL,
+  APPROVED_UDHAAR_OK,
+  CUSTOMER_NOT_FOUND,
+  REJECTED_MSG,
+  WINDOW_EXPIRED,
+  WRONG_PIN,
+} from "./responses";
 import { DEMO_PAYMENT_SIMULATIONS } from "./demoData";
 import { seedDemoMerchantCore, verifyPin } from "./seed";
 import {
@@ -59,11 +72,12 @@ export const agentTurn = mutation({
   args: {
     text: v.string(),
     source: v.optional(v.union(v.literal("voice"), v.literal("text"), v.literal("demo"))),
+    lang: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const started = Date.now();
     const merchant = await getDemoMerchant(ctx);
-    const result = await runAgent(ctx, merchant._id, args.text, args.source ?? "text");
+    const result = await runAgent(ctx, merchant._id, args.text, args.source ?? "text", args.lang);
     const latencyMs = Date.now() - started;
 
     await ctx.db.insert("agentLogs", {
@@ -75,6 +89,7 @@ export const agentTurn = mutation({
       success: result.success,
       latencyMs: Math.max(latencyMs, 12),
       source: args.source ?? "text",
+      lang: result.lang,
       createdAt: Date.now(),
     });
 
@@ -82,6 +97,7 @@ export const agentTurn = mutation({
       intent: result.intent,
       tool: result.tool,
       response: result.response,
+      lang: result.lang,
       success: result.success,
       latencyMs: Math.max(latencyMs, 12),
       pendingAction: result.pendingAction ?? null,
@@ -272,6 +288,7 @@ export const getAgentLogs = query({
       success: l.success,
       latencyMs: l.latencyMs,
       source: l.source,
+      lang: l.lang,
     }));
   },
 });
@@ -328,19 +345,20 @@ export const getPendingAction = query({
  * The agent NEVER executes these writes directly.
  */
 export const approvePendingAction = mutation({
-  args: { pendingId: v.string(), pin: v.string() },
+  args: { pendingId: v.string(), pin: v.string(), lang: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const lang = isLang(args.lang) ? args.lang : "hi";
     const merchant = await getDemoMerchant(ctx);
     const pend = await ctx.db.get(args.pendingId as Id<"pendingActions">);
     if (!pend || pend.merchantId !== merchant._id || pend.status !== "pending") {
-      return { ok: false as const, message: "Yeh action expire ho gaya ya already processed hai." };
+      return { ok: false as const, message: ACTION_EXPIRED[lang]() };
     }
     if (pend.expiresAt < Date.now()) {
       await ctx.db.patch(pend._id, { status: "expired" });
-      return { ok: false as const, message: "Approval window expire ho gaya. Request dobara bhejiye." };
+      return { ok: false as const, message: WINDOW_EXPIRED[lang]() };
     }
     if (!(await verifyPin(args.pin, merchant.demoPinHash))) {
-      return { ok: false as const, message: "Galat PIN. Dobara koshish kijiye." };
+      return { ok: false as const, message: WRONG_PIN[lang]() };
     }
 
     const payload = pend.payload as Record<string, unknown>;
@@ -356,7 +374,7 @@ export const approvePendingAction = mutation({
         (c) => c.name.toLowerCase() === String(payload.customerName).toLowerCase(),
       );
       if (!customer) {
-        return { ok: false as const, message: `${payload.customerName} naam ka customer nahi mila.` };
+        return { ok: false as const, message: CUSTOMER_NOT_FOUND[lang](String(payload.customerName)) };
       }
       const amount = Number(payload.amount);
       await ctx.db.insert("udhaarLedger", {
@@ -368,8 +386,8 @@ export const approvePendingAction = mutation({
         createdAt: Date.now(),
       });
       await ctx.db.patch(pend._id, { status: "approved" });
-      message = `${customer.name} ka ₹${amount} udhaar successfully update ho gaya.`;
-      detail = "Ledger entry created. Sensitive write executed only after PIN approval.";
+      message = APPROVED_UDHAAR_OK[lang](customer.name, String(amount));
+      detail = APPROVED_DETAIL[lang]();
     } else if (pend.actionType === "create_campaign") {
       const names = (payload.customerNames as string[]) ?? [];
       const campaignId = await ctx.db.insert("campaigns", {
@@ -383,10 +401,20 @@ export const approvePendingAction = mutation({
         createdAt: Date.now(),
       });
       await ctx.db.patch(pend._id, { status: "approved" });
-      message = `Campaign created for ${names.length} customers. Delivery simulated (no real WhatsApp sent).`;
-      detail = `Campaign id ${campaignId}. Channel: simulated_whatsapp (demo only).`;
+      message = APPROVED_CAMPAIGN_OK[lang](names.length);
+      detail = APPROVED_CAMPAIGN_DETAIL[lang](String(campaignId));
+      // Hand delivery off to the n8n workflow (if N8N_WEBHOOK_URL is set).
+      // Fire-and-forget: a slow/failing webhook must never block or fail the
+      // merchant's PIN approval; the /n8n/callback route converges state.
+      await ctx.scheduler.runAfter(0, api.n8n.dispatchCampaign, {
+        campaignId: String(campaignId),
+        merchantCode: merchant.merchantCode,
+        businessName: merchant.businessName,
+        offer: String(payload.offer ?? "₹50 coupon"),
+        customerNames: names,
+      });
     } else {
-      return { ok: false as const, message: "Unknown action type." };
+      return { ok: false as const, message: ACTION_EXPIRED[lang]() };
     }
 
     await ctx.db.insert("agentLogs", {
@@ -398,6 +426,7 @@ export const approvePendingAction = mutation({
       success: true,
       latencyMs: 0,
       source: "auth",
+      lang,
       createdAt: Date.now(),
     });
 
@@ -405,10 +434,39 @@ export const approvePendingAction = mutation({
   },
 });
 
+/**
+ * Delivery-state convergence: the n8n callback action calls this internal
+ * mutation to flip the campaign to "completed" once the workflow reports it
+ * finished fanning out the messages.
+ */
+export const setCampaignDelivered = internalMutation({
+  args: { campaignId: v.id("campaigns"), deliveredCount: v.number() },
+  handler: async (ctx, args) => {
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign) return;
+    await ctx.db.patch(args.campaignId, {
+      status: "completed",
+      channel: `simulated_whatsapp_via_n8n (${args.deliveredCount}/${campaign.customerNames.length})`,
+    });
+    await ctx.db.insert("agentLogs", {
+      merchantId: campaign.merchantId,
+      userInput: `[n8n delivery] campaign ${String(args.campaignId)}`,
+      detectedIntent: "CAMPAIGN_DELIVERED",
+      toolUsed: "n8n_campaign_delivery",
+      response: `n8n workflow delivered ${args.deliveredCount}/${campaign.customerNames.length} messages (simulated channel).`,
+      success: true,
+      latencyMs: 0,
+      source: "n8n",
+      createdAt: Date.now(),
+    });
+  },
+});
+
 /** Reject a pending action (merchant says no). */
 export const rejectPendingAction = mutation({
-  args: { pendingId: v.string() },
+  args: { pendingId: v.string(), lang: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const lang = isLang(args.lang) ? args.lang : "hi";
     const merchant = await getDemoMerchant(ctx);
     const pend = await ctx.db.get(args.pendingId as Id<"pendingActions">);
     if (pend && pend.merchantId === merchant._id && pend.status === "pending") {
@@ -418,14 +476,15 @@ export const rejectPendingAction = mutation({
         userInput: `[merchant rejection] ${pend.summary}`,
         detectedIntent: "SENSITIVE_ACTION_REJECTED",
         toolUsed: "none",
-        response: "Merchant ne action reject kiya. Koi change nahi kiya gaya.",
+        response: REJECTED_MSG[lang](),
         success: true,
         latencyMs: 0,
         source: "auth",
+        lang,
         createdAt: Date.now(),
       });
     }
-    return { ok: true as const, message: "Action cancel kar diya. Koi change nahi hua." };
+    return { ok: true as const, message: REJECTED_MSG[lang]() };
   },
 });
 
