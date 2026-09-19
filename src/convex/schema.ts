@@ -126,6 +126,19 @@ const schema = defineSchema(
       method: v.string(),
       createdAt: v.number(),
     }).index("by_merchant_time", ["merchantId", "createdAt"]),
+    
+    qrCodes: defineTable({
+      merchantId: v.id("merchants"),
+      razorpayQrId: v.string(),
+      amount: v.number(), // rupees, same unit as transactions
+      imageUrl: v.string(),
+      status: v.string(), // "pending" | "paid"
+      razorpayPaymentId: v.optional(v.string()),
+      createdAt: v.number(),
+      paidAt: v.optional(v.number()),
+    })
+      .index("by_qrId", ["razorpayQrId"])
+      .index("by_merchant", ["merchantId"]),
 
     // Server-side sensitive-action queue: the agent NEVER writes sensitive
     // data directly — it enqueues here, the merchant approves with demo PIN.
