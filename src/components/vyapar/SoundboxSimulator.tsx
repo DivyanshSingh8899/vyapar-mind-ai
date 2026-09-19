@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LANGS, type Lang } from "@/convex/langs";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -10,6 +11,7 @@ import {
   ShieldCheck,
   Wifi,
   CheckCircle2,
+  Languages,
 } from "lucide-react";
 import type { SoundboxState } from "@/hooks/useVyaparAgent";
 import type { PendingActionView } from "@/hooks/useVyaparAgent";
@@ -39,6 +41,7 @@ export function SoundboxSimulator({
   onReject,
   businessName,
   lastApproved,
+  lang,
 }: {
   state: SoundboxState;
   partial: string;
@@ -50,6 +53,7 @@ export function SoundboxSimulator({
   onReject: () => void;
   businessName: string;
   lastApproved: string | null;
+  lang: Lang;
 }) {
   const busy =
     state === "PROCESSING" ||
@@ -73,6 +77,9 @@ export function SoundboxSimulator({
         </Badge>
         <Badge className="glass-chip gap-1 border-white/60 text-slate-700" variant="secondary">
           <Volume2 className="size-3 text-teal-500" /> Speaker: {state === "RESPONDING" ? "Active" : "Ready"}
+        </Badge>
+        <Badge className="glass-chip gap-1 border-white/60 text-slate-700" variant="secondary">
+          <Languages className="size-3 text-indigo-500" /> {LANGS[lang].native} ({LANGS[lang].label})
         </Badge>
         <Badge className="glass-chip gap-1 border-white/60 text-slate-700" variant="secondary">
           {businessName}
