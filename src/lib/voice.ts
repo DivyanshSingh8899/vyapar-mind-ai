@@ -115,9 +115,11 @@ export function speak(
     u.rate = 1.0;
     u.pitch = 1.0;
     const voices = window.speechSynthesis.getVoices();
+    const languagePrefix = lang.slice(0, 2).toLowerCase();
     const voice =
       voices.find((v) => v.lang === lang && /female|woman/i.test(v.name)) ??
-      voices.find((v) => v.lang?.startsWith(lang.slice(0, 2)));
+      voices.find((v) => v.lang === lang) ??
+      voices.find((v) => v.lang?.toLowerCase().startsWith(languagePrefix));
     if (voice) u.voice = voice;
     if (onEnd) u.onend = () => onEnd();
     window.speechSynthesis.speak(u);
