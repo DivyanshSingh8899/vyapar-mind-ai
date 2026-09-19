@@ -95,9 +95,10 @@ export function useVyaparAgent() {
 
   // Server-side truth for pending sensitive actions (provides the DB id).
   const serverPending = useQuery(api.vyapar.getPendingAction);
-  // Voice provider config: does the backend have a Sarvam key configured?
+  // Voice provider config: which Sarvam directions the backend has keys for.
   const voiceConfig = useQuery(api.voice.getVoiceConfig);
-  const useSarvam = Boolean(voiceConfig?.sarvamAvailable);
+  const sarvamSttOn = Boolean(voiceConfig?.sarvamSttAvailable);
+  const sarvamTtsOn = Boolean(voiceConfig?.sarvamTtsAvailable);
   const serverPendingRef = useRef(serverPending);
   serverPendingRef.current = serverPending;
 
@@ -190,7 +191,7 @@ export function useVyaparAgent() {
             settled = true;
             setState("IDLE");
           };
-          if (useSarvam) {
+          if (sarvamTtsOn) {
             // Try premium Sarvam TTS first; silently fall back to browser TTS.
             try {
               const tts = await sarvamTtsAction({ text: res.response, language: LANGS[langRef.current].sarvamTts });
@@ -219,13 +220,13 @@ export function useVyaparAgent() {
         window.setTimeout(() => setState("IDLE"), 2500);
       }
     },
-    [sendTurn],
+    [sendTurn, sarvamTtsOn],
   );
 
   const startVoice = useCallback(() => {
     void (async () => {
       if (stateRef.current === "PAYMENT_INTERRUPT") return; // payment priority
-      if (useSarvam && supportsMediaRecorder()) {
+      if (sarvamSttOn && supportsMediaRecorder()) {
         // ── Sarvam path: record → secure backend STT (never a fake transcript) ──
         stopSpeaking();
         if (recRef.current) {
@@ -297,7 +298,7 @@ export function useVyaparAgent() {
       }
       sttRef.current = handle;
     })();
-  }, [runTurn, useSarvam]);
+  }, [runTurn, sarvamSttOn]);
 
   const cancelListening = useCallback(() => {
     sttRef.current?.stop();
