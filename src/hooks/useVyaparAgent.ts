@@ -1,5 +1,6 @@
 import { api } from "@/convex/_generated/api";
 import { useAction, useMutation, useQuery } from "convex/react";
+import { CLIENT_STRINGS, LANGS, type Lang } from "@/convex/langs";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   isSttSupported,
@@ -53,6 +54,22 @@ const nextMsgId = () => `m${++msgCounter}-${Date.now()}`;
 
 export function useVyaparAgent() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [lang, setLangState] = useState<Lang>(() => {
+    if (typeof window === "undefined") return "hi";
+    const saved = window.localStorage.getItem("vyapar-lang");
+    return saved === "hi" || saved === "en" || saved === "ta" || saved === "te" || saved === "kn" ? saved : "hi";
+  });
+  const langRef = useRef<Lang>(lang);
+  langRef.current = lang;
+  const setLang = useCallback((l: Lang) => {
+    setLangState(l);
+    try {
+      window.localStorage.setItem("vyapar-lang", l);
+    } catch {
+      /* private mode */
+    }
+  }, []);
+  const S = CLIENT_STRINGS[lang];
   const [state, setState] = useState<SoundboxState>("IDLE");
   const [partial, setPartial] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -94,7 +111,7 @@ export function useVyaparAgent() {
 
   // Seed the demo merchant on mount (idempotent server-side).
   useEffect(() => {
-    ensureMerchant({}).catch(() => setError("Seed failed. Reload the page."));
+    ensureMerchant({}).catch(() => setError(CLIENT_STRINGS[langRef.current].seedFailed));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Payment events ALWAYS take priority over any conversation state. */
@@ -109,18 +126,18 @@ export function useVyaparAgent() {
         {
           id: nextMsgId(),
           role: "payment",
-          text: `₹${p.amount} received on Paytm`,
+          text: `₹${p.amount} ${S.payment}`,
           at: p.at,
           meta: { intent: "PAYMENT_EVENT" },
         },
       ]);
-      speak(`₹${p.amount} received on Paytm`, "hi-IN");
+      speak(`₹${p.amount} ${S.paymentSpoken}`, LANGS[langRef.current].locale);
       window.setTimeout(() => {
         setPayment(null);
         setState(resumeRef.current === "PAYMENT_INTERRUPT" ? "IDLE" : resumeRef.current);
       }, 3800);
     },
-    [],
+    [S.payment, S.paymentSpoken],
   );
 
   const simulatePayment = useCallback(async () => {
@@ -128,9 +145,9 @@ export function useVyaparAgent() {
       const p = await simPayment({});
       interruptForPayment({ amount: p.amount, ref: p.ref, method: p.method, at: p.at });
     } catch {
-      setError("Payment simulation failed. Try again.");
+      setError(S.payFailed);
     }
-  }, [simPayment, interruptForPayment]);
+  }, [simPayment, interruptForPayment, S.payFailed]);
 
   const runTurn = useCallback(
     async (text: string, source: "voice" | "text" | "demo") => {
@@ -144,7 +161,7 @@ export function useVyaparAgent() {
       ]);
       setState("PROCESSING");
       try {
-        const res = await sendTurn({ text: trimmed, source });
+        const res = await sendTurn({ text: trimmed, source, lang: langRef.current });
         setLastTurn({ intent: res.intent, tool: res.tool, latencyMs: res.latencyMs });
         setMessages((prev) => [
           ...prev,
@@ -176,7 +193,7 @@ export function useVyaparAgent() {
           if (useSarvam) {
             // Try premium Sarvam TTS first; silently fall back to browser TTS.
             try {
-              const tts = await sarvamTtsAction({ text: res.response, language: "hi-IN" });
+              const tts = await sarvamTtsAction({ text: res.response, language: LANGS[langRef.current].sarvamTts });
               if (tts.available && tts.audioBase64 && playBase64Audio(tts.audioBase64, done)) {
                 window.setTimeout(done, 20000);
                 return;
@@ -185,7 +202,7 @@ export function useVyaparAgent() {
               /* fall through to browser TTS */
             }
           }
-          speak(res.response, "hi-IN", done);
+          speak(res.response, LANGS[langRef.current].locale, done);
           window.setTimeout(done, Math.min(15000, 4000 + res.response.length * 60));
         }
       } catch {
@@ -195,7 +212,7 @@ export function useVyaparAgent() {
           {
             id: nextMsgId(),
             role: "agent",
-            text: "System error aa gayi. Dobara koshish kijiye.",
+            text: CLIENT_STRINGS[langRef.current].sysError,
             at: Date.now(),
           },
         ]);
@@ -224,7 +241,7 @@ export function useVyaparAgent() {
             return;
           }
           try {
-            const stt = await sarvamSttAction({ audioBase64: audio.base64, language: "hi" });
+            const stt = await sarvamSttAction({ audioBase64: audio.base64, language: LANGS[langRef.current].sarvamStt });
             if (!stt.available || !stt.text.trim()) {
               setError(stt.note || "Transcription unavailable — type instead.");
               setState("IDLE");
@@ -244,7 +261,7 @@ export function useVyaparAgent() {
           setState("IDLE");
         } else {
           recRef.current = rec;
-          setPartial("(recording — tap again to send)");
+          setPartial(CLIENT_STRINGS[langRef.current].recording);
         }
         return;
       }
@@ -255,7 +272,7 @@ export function useVyaparAgent() {
       }
       stopSpeaking();
       setState("LISTENING");
-      const handle = startListening("hi-IN", {
+      const handle = startListening(LANGS[langRef.current].locale, {
         onPartial: (t) => setPartial(t),
         onFinal: (t) => {
           sttRef.current = null;
@@ -303,8 +320,8 @@ export function useVyaparAgent() {
   const approve = useCallback(
     async (pin: string) => {
       const id = pending?.id ?? serverPendingRef.current?.id;
-      if (!id) return { ok: false, message: "Koi pending action nahi mila." };
-      const res = await approveAction({ pendingId: id, pin });
+      if (!id) return { ok: false, message: CLIENT_STRINGS[langRef.current].noPending };
+      const res = await approveAction({ pendingId: id, pin, lang: langRef.current });
       if (res.ok) {
         setLastApproved(res.message);
         setPending(null);
@@ -319,7 +336,7 @@ export function useVyaparAgent() {
             meta: { tool: "approved_via_pin" },
           },
         ]);
-        speak(res.message, "hi-IN", () => setState("IDLE"));
+        speak(res.message, LANGS[langRef.current].locale, () => setState("IDLE"));
         return { ok: true, message: res.message };
       }
       return { ok: false, message: res.message };
@@ -332,7 +349,7 @@ export function useVyaparAgent() {
     setPending(null);
     if (id) {
       try {
-        await rejectAction({ pendingId: id });
+        await rejectAction({ pendingId: id, lang: langRef.current });
       } catch {
         /* server state self-corrects via subscription */
       }
@@ -342,7 +359,7 @@ export function useVyaparAgent() {
       {
         id: nextMsgId(),
         role: "agent",
-        text: "Theek hai, main kuch bhi change nahi karungi. Aur kaise madad karun?",
+        text: CLIENT_STRINGS[langRef.current].rejected,
         at: Date.now(),
       },
     ]);
@@ -374,6 +391,8 @@ export function useVyaparAgent() {
     simulatePayment,
     clearConversation,
     sttSupported: isSttSupported(),
+    lang,
+    setLang,
   };
 }
 

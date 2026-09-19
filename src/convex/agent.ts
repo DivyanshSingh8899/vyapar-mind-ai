@@ -1,13 +1,53 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Vyapar-Mind — Agent engine
-// Deterministic intent router → business tools → merchant-friendly responses.
-// The LLM never touches the DB directly: all access goes through these tools,
-// and sensitive writes are enqueued as pending_actions for merchant approval.
-// This module is provider-agnostic; if SARVAM_AI_API_KEY is configured, the
-// same flow can be routed through Sarvam's LLM for richer NLU (see actions.ts).
+// Vyapar-Mind — Agent engine (multilingual)
+// Deterministic intent router → business tools → merchant-friendly responses
+// in Hindi, English, Tamil, Telugu or Kannada. The LLM never touches the DB
+// directly: all access goes through tools, and sensitive writes are enqueued
+// as pending_actions for merchant approval.
 // ─────────────────────────────────────────────────────────────────────────────
 import { Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
+import {
+  CUSTOMER_ALIASES,
+  INTENT_KEYWORDS,
+  PRODUCT_ALIASES,
+  isLang,
+  type Lang,
+} from "./langs";
+import {
+  APPROVE_AUTH_MSG,
+  APPROVE_PENDING_DETAIL,
+  CUSTOMER_INSIGHTS,
+  CUSTOMER_NOT_FOUND,
+  HELP,
+  INACTIVE_LIST,
+  INVENTORY_ALL_OK,
+  INVENTORY_LOW_LIST,
+  LOAN_NONE,
+  LOAN_OFFER,
+  NO_INACTIVE,
+  NO_PENDING,
+  NO_WINBACK_TARGETS,
+  PAYMENT_PRIORITY,
+  PRODUCT_LOW,
+  PRODUCT_NOT_FOUND,
+  PRODUCT_OK,
+  SALES_TODAY,
+  SYSTEM_ERROR,
+  UDHAAR_AUTH_MSG,
+  UDHAAR_BALANCE_ONE,
+  UDHAAR_CONFIRM_LABEL,
+  UDHAAR_NEED_AMOUNT,
+  UDHAAR_NEED_NAME,
+  UDHAAR_PENDING_DETAIL,
+  UDHAAR_PENDING_SUMMARY,
+  UDHAAR_TOTAL,
+  UNKNOWN,
+  WINBACK_CONFIRM_LABEL,
+  WINBACK_PENDING_DETAIL,
+  WINBACK_PENDING_SUMMARY,
+  WINBACK_PROPOSAL,
+} from "./responses";
 import {
   getCustomerInsights,
   getInactiveCustomers,
@@ -37,6 +77,7 @@ export type AgentResult = {
   intent: Intent;
   tool: string;
   response: string;
+  lang: Lang;
   success: boolean;
   /** Sensitive action awaiting merchant approval + demo PIN. */
   pendingAction?: {
@@ -56,41 +97,78 @@ const numWords: Record<string, number> = {
 
 const has = (t: string, ...words: string[]) => words.some((w) => t.includes(w));
 
-/** Hinglish + English intent router (deterministic, testable). */
-export function routeIntent(raw: string): Intent {
+/**
+ * Multilingual intent router (deterministic, testable).
+ * Matches native-script + romanized keywords for each language, and always
+ * falls back to the Hindi/English keyword set (mixed speech is common).
+ */
+export function routeIntent(raw: string, lang: Lang = "hi"): Intent {
   const t = raw.toLowerCase().trim();
+  const kw = INTENT_KEYWORDS[lang];
 
-  if (has(t, "udhaar") && has(t, "update", "karo", "kar do", "kam", "add", "jodo", "deduct", "repay")) {
+  // ── Sensitive action: udhaar/credit update ──
+  if (
+    has(t, ...kw.udhaarUpdate) &&
+    (has(t, ...kw.udhaarQuery) || /(\d{2,6})/.test(t) || has(t, "update", "karo", "புதுப்பி", "అప్‌డేట్", "ಅಪ್‌ಡೇಟ್", "చెయ్యి", "ಮಾಡು", "மாற்று", "செய்"))
+  ) {
     return "UDHAAR_UPDATE";
   }
-  if (
-    has(t, "offer bhej", "offer send", "coupon bhej", "campaign", "win back", "winback", "wapas la") ||
-    (has(t, "offer") && has(t, "customer"))
-  ) {
+
+  // ── Win-back campaign ──
+  if (has(t, ...kw.winback) && (has(t, ...kw.customers) || has(t, "unko", "unhe", "அவர்களுக்கு", "వాళ్లకి", "ಅವರಿಗೆ", "அவங்க", "వాళ్ళు", "ಅವರು"))) {
     return "CUSTOMER_WINBACK";
   }
-  if (has(t, "loan", "credit", "udhaar offer")) return "LOAN_RECOMMENDATION";
-  if (has(t, "udhaar", "khata", "udhar")) return "UDHAAR_QUERY";
+  if (has(t, "campaign", "win back", "winback", "wapas la")) return "CUSTOMER_WINBACK";
+
+  // ── Loan ──
+  if (has(t, ...kw.loan) && !has(t, ...kw.udhaarQuery)) return "LOAN_RECOMMENDATION";
+
+  // ── Udhaar (credit) query ──
+  if (has(t, ...kw.udhaarQuery)) return "UDHAAR_QUERY";
+
+  // ── Inventory ──
+  if (has(t, ...kw.inventory)) return "INVENTORY_QUERY";
+
+  // ── Sales ──
+  if (has(t, ...kw.sales)) return "SALES_QUERY";
+
+  // ── Customers ──
+  // "Who hasn't come in N days?" often omits the word "customer" entirely —
+  // detect the inactive-phrasing directly (works in all 5 languages).
+  if (has(t, ...kw.customers) || has(t, ...kw.inactive)) return "CUSTOMER_INSIGHT";
+
+  // ── Approval (voice "yes") ──
+  if (has(t, ...kw.approve)) return "APPROVE_ACTION";
+
+  // ── Payment event ──
+  if (has(t, ...kw.payment)) return "PAYMENT_EVENT";
+
+  // ── Help / greeting ──
+  if (has(t, ...kw.help)) return "GENERAL_MERCHANT_QUERY";
+
+  // Cross-language fallback (mixed-language speech is common in India):
+  return routeIntentEnFb(t);
+}
+
+/** Secondary English-keyword pass for mixed-language utterances. */
+function routeIntentEnFb(t: string): Intent {
+  if (has(t, "udhaar") && has(t, "update", "karo", "kam", "add", "jodo", "deduct", "repay")) return "UDHAAR_UPDATE";
+  if (has(t, "offer", "coupon", "campaign")) return "CUSTOMER_WINBACK";
+  if (has(t, "loan", "credit")) return "LOAN_RECOMMENDATION";
+  if (has(t, "udhaar", "khata")) return "UDHAAR_QUERY";
   if (has(t, "stock", "inventory", "maal", "saman")) return "INVENTORY_QUERY";
-  if (
-    has(t, "kitni sale", "kitna business", "kitna bikri", "aaj ka", "today", "sales", "revenue",
-      "business kaisa", "business hua", "summary", "kal se", "kamai")
-  ) {
-    return "SALES_QUERY";
-  }
-  if (has(t, "customer", "graahak", "grahak")) return "CUSTOMER_INSIGHT";
-  if (has(t, "haan", "yes", "confirm", "approve", "ok ", "ok", "theek hai", "karo")) {
-    return "APPROVE_ACTION";
-  }
+  if (has(t, "kitni sale", "kitna business", "aaj ka", "today", "sales", "business kaisa", "business hua", "summary")) return "SALES_QUERY";
+  if (has(t, "customer")) return "CUSTOMER_INSIGHT";
+  if (has(t, "haan", "yes", "confirm", "approve", "ok")) return "APPROVE_ACTION";
   if (has(t, "payment", "aaya", "received", "paisa")) return "PAYMENT_EVENT";
-  if (has(t, "help", "kya kar sakte", "namaste", "hello", "hi", "hey")) {
-    return "GENERAL_MERCHANT_QUERY";
-  }
   return "UNKNOWN";
 }
 
 function extractDays(t: string): number {
-  const m = t.match(/(\d+)\s*(din|day|days|dino)/);
+  const m =
+    t.match(/(\d+)\s*(din|day|days|dino|நாள்|நாட்கள்|రోజు|రోజులు|ದಿನ|ದಿನಗಳು)/) ??
+    t.match(/(?:நாட்களாக|రోజులుగా|ದಿನವಾಗಿ)\s*(\d+)/) ??
+    t.match(/(\d+)\s*(?:நாட்கள|రోజుల|ದಿನಗಳ)/);
   if (m) return Math.max(1, parseInt(m[1], 10));
   for (const [w, n] of Object.entries(numWords)) {
     if (new RegExp(`${w}\\s*(din|day)`).test(t)) return n;
@@ -99,36 +177,80 @@ function extractDays(t: string): number {
 }
 
 function extractAmount(t: string): number | null {
-  const m = t.match(/(?:₹|rs\.?|rupees|rupaye)\s*([0-9][0-9,]*)/i) ?? t.match(/([0-9][0-9,]*)\s*(?:₹|rs\.?|rupaye|rupees)/i);
+  const m =
+    t.match(/(?:₹|rs\.?|rupees|rupaye|ரூபாய்|రూపాయలు|ರೂಪಾಯಿ)\s*([0-9][0-9,]*)/i) ??
+    t.match(/([0-9][0-9,]*)\s*(?:₹|rs\.?|rupaye|rupees|ரூபாய்|రూపాయలు|ರೂಪಾಯಿ)/i);
   if (m) return parseInt(m[1].replace(/,/g, ""), 10);
+  // Native-script utterances usually place the bare number before the currency word
+  const native = t.match(/(\d{2,6})\s*[^\x00-\x7F]/);
+  if (native) return parseInt(native[1], 10);
   const plain = t.match(/\b(\d{2,6})\b/);
   return plain ? parseInt(plain[1], 10) : null;
 }
 
-function extractCustomerName(t: string): string | null {
+/** Resolve a customer name from any language (native script → canonical). */
+export function extractCustomerName(raw: string, lang: Lang = "hi"): string | null {
+  const t = raw.toLowerCase();
+
+  // 1) Native-script alias → canonical English first name.
+  for (const [alias, canonical] of Object.entries(CUSTOMER_ALIASES)) {
+    if (raw.includes(alias)) return canonical;
+  }
+
+  // 2) Romanized "ramesh ka / ramesh kadan / for ramesh" patterns.
   const m =
-    t.match(/([a-z]+(?:\s[a-z]+)?)\s*(?:ka|ki|kaa)\s/) ??
+    t.match(/([a-z]+(?:\s[a-z]+)?)\s*(?:ka|ki|kaa|kuda|kadan|odu|n|ey)\s/) ??
     t.match(/(?:for|of)\s+([a-z]+(?:\s[a-z]+)?)/);
-  if (!m) return null;
-  const stop = new Set(["aaj", "kal", "milk", "stock", "udhaar", "udhar", "kitna", "kitne", "update", "offer", "payment"]);
-  const candidate = m[1].trim();
-  if (stop.has(candidate)) return null;
-  return candidate
-    .split(" ")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+  if (m) {
+    const stop = new Set([
+      "aaj", "kal", "milk", "stock", "udhaar", "udhar", "kitna", "kitne", "update", "offer", "payment",
+      "te", "thi", "palu", "paal", "haalu", "enna", "kya", "kadan", "appu", "saala", "khata", "khate",
+    ]);
+    const candidate = m[1].trim();
+    if (!stop.has(candidate)) {
+      return candidate
+        .split(" ")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" ");
+    }
+  }
+
+  // 3) Known first names anywhere in the utterance.
+  const known = ["ramesh", "suresh", "anita", "vijay", "pooja", "amit", "kavita", "irfan", "lakhan", "deepak", "sunita", "rahul", "manoj", "rekha", "harish", "gopal", "neelam", "shankar"];
+  for (const k of known) if (t.includes(k)) return k.charAt(0).toUpperCase() + k.slice(1);
+
+  void lang;
+  return null;
 }
 
-function extractProduct(t: string): string | null {
-  // Known catalogue keywords win first (most reliable path).
+/** Resolve a product from any language (native script → canonical). */
+export function extractProduct(raw: string, lang: Lang = "hi"): string | null {
+  // 1) Native/romanized alias → canonical seeded product.
+  for (const [alias, canonical] of Object.entries(PRODUCT_ALIASES)) {
+    if (raw.toLowerCase().includes(alias.toLowerCase()) && /[\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF]/.test(raw)) {
+      return canonical;
+    }
+  }
+
+  const t = raw.toLowerCase();
+  // 2) Known English catalogue keywords (most reliable path).
   const known = ["milk", "bread", "egg", "rice", "atta", "wheat", "dal", "oil", "sugar", "tea", "biscuit", "detergent", "soap", "shampoo", "butter", "curd", "flour"];
   for (const k of known) if (t.includes(k)) return k;
-  const m = t.match(/(?:ka|ki|of|kitna|kitne)\s+([a-z][a-z0-9 ()\-]*?)\s*(?:ka|ki|kitna|kitne|stock|hai|left|bacha|$)/);
+
+  // 3) Romanized South-Indian product words.
+  for (const [alias, canonical] of Object.entries(PRODUCT_ALIASES)) {
+    if (/^[a-z]+$/i.test(alias) && new RegExp(`\\b${alias}\\b`).test(t)) return canonical;
+  }
+
+  // 4) Generic "X ka stock" extraction.
+  const m = t.match(/(?:ka|ki|of|kitna|kitne|சரக்கு|స్టాక్|ಸ್ಟಾಕ್)\s+([a-z][a-z0-9 ()\-]*?)\s*(?:ka|ki|kitna|kitne|stock|hai|left|bacha|$)/);
   if (m) {
     const cand = m[1].trim();
     const stop = /^(kitna|kitne|kya|sab|kaisa|stock|saman|maal|udhaar|udhar|offer)$/;
     if (cand && !stop.test(cand)) return cand;
   }
+
+  void lang;
   return null;
 }
 
@@ -139,18 +261,21 @@ const actionId = () =>
 // ───────────────────────── AGENT ENGINE ─────────────────────────
 
 /**
- * Run the agent for a merchant utterance. Pure read intents execute
- * immediately; sensitive writes create a pending_action that requires
- * merchant approval (demo PIN) before anything touches the database.
+ * Run the agent for a merchant utterance in the chosen language. Pure read
+ * intents execute immediately; sensitive writes create a pending_action that
+ * requires merchant approval (demo PIN) before anything touches the database.
  */
 export async function runAgent(
   ctx: MutationCtx,
   merchantId: Id<"merchants">,
   userInput: string,
   source: "voice" | "text" | "demo" = "text",
+  langInput?: string,
 ): Promise<AgentResult> {
-  const intent = routeIntent(userInput);
+  const lang: Lang = isLang(langInput) ? langInput : "hi";
+  const intent = routeIntent(userInput, lang);
   const t = userInput.toLowerCase();
+  const R = (tpl: Record<Lang, (...a: any[]) => string>) => (...a: unknown[]) => tpl[lang](...a);
   let tool = "unknown";
   let response = "";
   let success = true;
@@ -162,33 +287,40 @@ export async function runAgent(
         tool = "get_today_sales";
         const s = await getTodaySales(ctx, merchantId);
         const dir = s.deltaPct >= 0 ? "zyada" : "kam";
-        response =
-          `Aaj aapki sale ${inr(s.todaySales)} rahi hai — ${s.txnCount} transactions, average ${inr(s.avgValue)}. ` +
-          (s.deltaPct === 0
-            ? "Kal ke jaisa hi chal raha hai."
-            : `Kal se ${Math.abs(s.deltaPct)}% ${dir} hai.`) +
-          (s.topCategory ? ` Sabse zyada ${s.topCategory} category mein bikri hui.` : "");
+        response = R(SALES_TODAY)(
+          inr(s.todaySales),
+          s.txnCount,
+          inr(s.avgValue),
+          s.deltaPct,
+          dir,
+          s.topCategory,
+        );
         break;
       }
 
       case "CUSTOMER_INSIGHT": {
-        if (has(t, "nahi aaye", "nahi aaya", "inactive", "gayab")) {
+        if (has(t, "nahi aaye", "nahi aaya", "inactive", "gayab", "வரவில்லை", "రాలేదు", "రాని", "ಬಂದಿಲ್ಲ", "ಬಾರದ")) {
           tool = "get_inactive_customers";
           const days = extractDays(t);
           const r = await getInactiveCustomers(ctx, merchantId, days);
           response = r.count
-            ? `${r.count} customers pichle ${days} din se nahi aaye. Sabse purane: ${r.customers
-                .slice(0, 3)
-                .map((c) => `${c.name} (${c.daysSince} din)`)
-                .join(", ")}. Bol dijiye "unko offer bhej do" to campaign bana dunga.`
-            : `Shabaash! Pichle ${days} din mein koi customer inactive nahi hai.`;
+            ? R(INACTIVE_LIST)(
+                r.count,
+                days,
+                r.customers.slice(0, 3).map((c) => `${c.name} (${c.daysSince})`).join(", "),
+              )
+            : R(NO_INACTIVE)(days);
         } else {
           tool = "get_customer_insights";
           const r = await getCustomerInsights(ctx, merchantId);
-          response =
-            `Aapke ${r.totalCustomers} customers hain — ${r.active} active (7 din), ` +
-            `${r.returning} repeat, ${r.inactive} 30+ din se nahi aaye. ` +
-            `Top customer: ${r.topCustomers[0]?.name ?? "—"} (${inr(r.topCustomers[0]?.totalSpent ?? 0)}).`;
+          response = R(CUSTOMER_INSIGHTS)(
+            r.totalCustomers,
+            r.active,
+            r.returning,
+            r.inactive,
+            r.topCustomers[0]?.name ?? "—",
+            inr(r.topCustomers[0]?.totalSpent ?? 0),
+          );
         }
         break;
       }
@@ -198,16 +330,17 @@ export async function runAgent(
         const days = extractDays(t) || 30;
         const r = await getInactiveCustomers(ctx, merchantId, days);
         if (!r.count) {
-          response = `Pichle ${days} din mein koi inactive customer nahi mila — campaign ki zaroorat nahi.`;
+          response = R(NO_WINBACK_TARGETS)(days);
           break;
         }
-        const offer = extractAmount(t) ? `₹${extractAmount(t)} coupon` : "₹50 promotional coupon";
+        const amt = extractAmount(t);
+        const offer = amt ? `₹${amt} coupon` : "₹50 promotional coupon";
         const actionIdStr = actionId();
-        const aid = await ctx.db.insert("pendingActions", {
+        await ctx.db.insert("pendingActions", {
           merchantId,
           actionType: "create_campaign",
           payload: { days, offer, customerNames: r.customers.map((c) => c.name), actionId: actionIdStr },
-          summary: `Win-back campaign for ${r.count} customers (${days}+ din inactive) with ${offer}`,
+          summary: R(WINBACK_PENDING_SUMMARY)(offer, r.count),
           status: "pending",
           expiresAt: Date.now() + 10 * 60 * 1000,
           createdAt: Date.now(),
@@ -215,88 +348,90 @@ export async function runAgent(
         pendingAction = {
           actionId: actionIdStr,
           actionType: "create_campaign",
-          summary: `Campaign: ${offer} → ${r.count} customers`,
-          detail: `${r.count} customers pichle ${days} din se nahi aaye: ${r.customers
-            .slice(0, 5)
-            .map((c) => c.name)
-            .join(", ")}${r.count > 5 ? "…" : ""}. Offer: ${offer}. Channel: simulated WhatsApp (demo).`,
-          confirmLabel: `Approve campaign for ${r.count} customers`,
+          summary: R(WINBACK_PENDING_SUMMARY)(offer, r.count),
+          detail: R(WINBACK_PENDING_DETAIL)(
+            r.count,
+            days,
+            r.customers.slice(0, 5).map((c) => c.name).join(", ") + (r.count > 5 ? "…" : ""),
+            offer,
+          ),
+          confirmLabel: R(WINBACK_CONFIRM_LABEL)(r.count),
           payload: {},
         };
-        response =
-          `${r.count} customers pichle ${days} din se nahi aaye. Main ${offer} ka win-back campaign bana sakti hoon ` +
-          `(simulated WhatsApp). Merchant authentication required hai — approve karenge?`;
-        void aid;
+        response = R(WINBACK_PROPOSAL)(r.count, days, offer);
         break;
       }
 
       case "INVENTORY_QUERY": {
-        const product = extractProduct(t);
+        const product = extractProduct(userInput, lang);
         if (product) {
           tool = "get_product_stock";
           const p = await getProductStock(ctx, merchantId, product);
           if (!p.found) {
-            response = `"${product}" naam ka product stock list mein nahi mila. Kya aap product ka exact naam batayenge?`;
+            response = R(PRODUCT_NOT_FOUND)(product);
             success = false;
           } else if (p.quantity <= p.reorderLevel) {
-            response = `${p.productName} ke sirf ${p.quantity} unit bache hain (reorder level ${p.reorderLevel}). Order karne ka time ho gaya hai!`;
+            response = R(PRODUCT_LOW)(p.productName, p.quantity, p.reorderLevel);
           } else {
-            response = `${p.productName} ka stock theek hai — ${p.quantity} unit available (₹${p.price} per unit).`;
+            response = R(PRODUCT_OK)(p.productName, p.quantity, `₹${p.price}`);
           }
         } else {
           tool = "get_inventory_status";
           const inv = await getInventoryStatus(ctx, merchantId);
           response = inv.lowStockCount
-            ? `Aapke ${inv.totalProducts} products hain, ${inv.lowStockCount} low stock hain: ${inv.lowStock
-                .slice(0, 3)
-                .map((p) => `${p.name} (${p.qty})`)
-                .join(", ")}. Reorder list taiyaar hai.`
-            : `Sab ${inv.totalProducts} products ka stock theek hai. Kisi bhi product ka naam boliye, detail bata dunga.`;
+            ? R(INVENTORY_LOW_LIST)(
+                inv.totalProducts,
+                inv.lowStockCount,
+                inv.lowStock.slice(0, 3).map((p) => `${p.name} (${p.qty})`).join(", "),
+              )
+            : R(INVENTORY_ALL_OK)(inv.totalProducts);
         }
         break;
       }
 
       case "UDHAAR_QUERY": {
         tool = "get_udhaar_balance";
-        const name = extractCustomerName(t);
+        const name = extractCustomerName(userInput, lang);
         const r = await getUdhaarBalance(ctx, merchantId, name ?? undefined);
         if (name && !r.found) {
-          response = `${name} naam ka customer nahi mila. Kya aap kisi aur customer ka naam batayenge?`;
+          response = R(CUSTOMER_NOT_FOUND)(name);
           success = false;
         } else if (name && "balance" in r) {
-          response = `${(r as { name: string }).name} ka udhaar ${inr((r as { balance: number }).balance)} hai.`;
+          response = R(UDHAAR_BALANCE_ONE)((r as { name: string }).name, inr((r as { balance: number }).balance));
         } else {
-          response = `Total udhaar ${inr((r as { total: number }).total)} hai, ${(r as { customerCount: number }).customerCount} customers par. Sabse zyada: ${(r as { top: { name: string; amount: number }[] }).top
-            .map((c) => `${c.name} (${inr(c.amount)})`)
-            .join(", ")}.`;
+          const rr = r as { total: number; customerCount: number; top: { name: string; amount: number }[] };
+          response = R(UDHAAR_TOTAL)(
+            inr(rr.total),
+            rr.customerCount,
+            rr.top.map((c) => `${c.name} (${inr(c.amount)})`).join(", "),
+          );
         }
         break;
       }
 
       case "UDHAAR_UPDATE": {
         tool = "update_udhaar (pending approval)";
-        const name = extractCustomerName(t);
+        const name = extractCustomerName(userInput, lang);
         const amount = extractAmount(t);
         if (!name || !amount) {
-          response = name
-            ? "Kitne rupaye ka udhaar update karna hai? Amount bataiye."
-            : "Kis customer ka udhaar update karna hai? Naam aur amount dono bataiye.";
+          response = name ? R(UDHAAR_NEED_AMOUNT)(name) : R(UDHAAR_NEED_NAME)();
           success = false;
           break;
         }
         const bal = await getUdhaarBalance(ctx, merchantId, name);
         if (!bal.found) {
-          response = `${name} naam ka customer nahi mila. Kya aap kisi aur customer ka naam batayenge?`;
+          response = R(CUSTOMER_NOT_FOUND)(name);
           success = false;
           break;
         }
         // SENSITIVE: never execute directly. Enqueue for merchant PIN approval.
+        const balOk = bal as { name: string; balance: number };
         const actionIdStr = actionId();
         await ctx.db.insert("pendingActions", {
           merchantId,
           actionType: "udhaar_update",
-          payload: { customerName: (bal as { name: string }).name, amount, actionId: actionIdStr },
-          summary: `Udhaar update: ${(bal as { name: string }).name} — ${inr(amount)} repayment`,
+          payload: { customerName: balOk.name, amount, actionId: actionIdStr },
+          summary: R(UDHAAR_PENDING_SUMMARY)(balOk.name, inr(amount)),
           status: "pending",
           expiresAt: Date.now() + 10 * 60 * 1000,
           createdAt: Date.now(),
@@ -304,16 +439,12 @@ export async function runAgent(
         pendingAction = {
           actionId: actionIdStr,
           actionType: "udhaar_update",
-          summary: `${(bal as { name: string }).name} ka udhaar ${inr(amount)} kam karna hai`,
-          detail: `Current balance: ${inr((bal as { balance: number }).balance)}. Naya balance: ${inr(
-            Math.max(0, (bal as { balance: number }).balance - amount),
-          )}. Yeh ek sensitive financial action hai.`,
-          confirmLabel: `Approve ${inr(amount)} repayment`,
+          summary: R(UDHAAR_PENDING_SUMMARY)(balOk.name, inr(amount)),
+          detail: R(UDHAAR_PENDING_DETAIL)(inr(balOk.balance), inr(Math.max(0, balOk.balance - amount))),
+          confirmLabel: R(UDHAAR_CONFIRM_LABEL)(inr(amount)),
           payload: {},
         };
-        response =
-          `${(bal as { name: string }).name} ka udhaar ${inr(amount)} kam karna hai. ` +
-          `Udhaar update ke liye merchant authentication required hai — demo PIN daaliye.`;
+        response = R(UDHAAR_AUTH_MSG)(balOk.name, inr(amount));
         break;
       }
 
@@ -322,15 +453,15 @@ export async function runAgent(
         const r = await getLoanRecommendation(ctx, merchantId);
         response =
           r.amount > 0
-            ? `Aapki recent business activity ke basis par aapke profile ke liye ek simulated merchant credit offer of ${inr(r.amount)} available hai. Business activity score: ${r.activityScore}/100 — ${r.reason}. Note: yeh DEMO / SIMULATED OFFER hai, koi asli Paytm loan approval nahi.`
-            : `Abhi aapki business activity score ${r.activityScore}/100 hai, isliye koi simulated credit offer generate nahi hui. Kuch aur din consistent sale ke baad phir poochhiye. (DEMO / SIMULATED)`;
+            ? R(LOAN_OFFER)(inr(r.amount), r.activityScore, r.reason)
+            : R(LOAN_NONE)(r.activityScore);
         break;
       }
 
       case "PAYMENT_EVENT": {
         tool = "get_today_sales";
         const s = await getTodaySales(ctx, merchantId);
-        response = `Payments ke liye Soundbox live hai — aaj ab tak ${inr(s.todaySales)} receive hua hai via ${s.topMethod ?? "UPI"}.`;
+        response = R(PAYMENT_PRIORITY)(inr(s.todaySales), s.topMethod ?? "UPI");
         break;
       }
 
@@ -341,7 +472,7 @@ export async function runAgent(
           .order("desc")
           .first();
         if (!pend) {
-          response = "Koi pending action nahi mila jo approve karna ho.";
+          response = R(NO_PENDING)();
           success = false;
           break;
         }
@@ -349,36 +480,34 @@ export async function runAgent(
           actionId: (pend.payload as { actionId?: string }).actionId ?? pend._id.slice(-8),
           actionType: pend.actionType as "udhaar_update" | "create_campaign",
           summary: pend.summary,
-          detail: "Aapne haan kaha — ab authentication chahiye. Demo PIN daaliye.",
+          detail: R(APPROVE_PENDING_DETAIL)(),
           confirmLabel: "Approve & authenticate",
           payload: {},
         };
         tool = "request_action_approval";
-        response = "Authentication required hai. Demo PIN daaliye, phir main action complete kar dunga.";
+        response = R(APPROVE_AUTH_MSG)();
         break;
       }
 
       case "GENERAL_MERCHANT_QUERY": {
         tool = "help";
-        response =
-          "Namaste! Main Vyapar-Mind hoon. Aap poochh sakte hain: aaj ki sale, inactive customers, stock, udhaar, ya loan offer. Payment aane par main turant announce karungi.";
+        response = R(HELP)();
         break;
       }
 
       default: {
         tool = "none";
         success = false;
-        response =
-          "Maaf kijiye, yeh samajh nahi aaya. Aap sale, stock, udhaar, customers ya loan ke baare mein poochh sakte hain.";
+        response = R(UNKNOWN)();
         break;
       }
     }
   } catch (err) {
     success = false;
     tool = tool === "unknown" ? "error" : tool;
-    response = "Sorry, system error aa gayi. Dobara koshish kijiye.";
+    response = R(SYSTEM_ERROR)();
     console.error("[vyapar-mind] agent error:", err);
   }
 
-  return { intent, tool, response, success, pendingAction };
+  return { intent, tool, response, lang, success, pendingAction };
 }

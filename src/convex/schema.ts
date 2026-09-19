@@ -115,6 +115,7 @@ const schema = defineSchema(
       success: v.boolean(),
       latencyMs: v.number(),
       source: v.string(), // "voice" | "text" | "demo"
+      lang: v.optional(v.string()), // "hi" | "en" | "ta" | "te" | "kn"
       createdAt: v.number(),
     }).index("by_merchant_time", ["merchantId", "createdAt"]),
 
