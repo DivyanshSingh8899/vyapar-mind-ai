@@ -163,3 +163,6 @@ Voice works without any keys via the browser Web Speech API; campaign delivery w
 >>>>>>> 83aa755fc42c97a366a12b446371f7c5ac13ae9c
 =======
 >>>>>>> d107a8e981c49610766f7f56e582f90fb1dadcb8
+
+
+[https://vyapar-mind.vercel.app/](https://vyapar-mind.vercel.app/)
