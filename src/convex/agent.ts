@@ -59,6 +59,7 @@ import {
   getUdhaarBalance,
   inr,
 } from "./tools";
+import { internal } from "./_generated/api";
 
 export type Intent =
   | "SALES_QUERY"
@@ -70,6 +71,7 @@ export type Intent =
   | "LOAN_RECOMMENDATION"
   | "PAYMENT_EVENT"
   | "GENERAL_MERCHANT_QUERY"
+  | "CREATE_QR"
   | "APPROVE_ACTION"
   | "UNKNOWN";
 
@@ -91,11 +93,133 @@ export type AgentResult = {
 };
 
 const numWords: Record<string, number> = {
-  ek: 1, do: 2, teen: 3, char: 4, paanch: 5, panch: 5,
-  bees: 20, tees: 30, chaalis: 40, pachaas: 50, saath: 60,
+  ek: 1,
+  do: 2,
+  teen: 3,
+  char: 4,
+  paanch: 5,
+  panch: 5,
+  bees: 20,
+  tees: 30,
+  chaalis: 40,
+  pachaas: 50,
+  saath: 60,
 };
 
 const has = (t: string, ...words: string[]) => words.some((w) => t.includes(w));
+
+// ── QR creation (voice/text: "10 rupees ka QR banao") ──
+const QR_MENTION = /\bq\s?r\b|क्यू\s?आर|கியூ\s?ஆர்|క్యూ\s?ఆర్|ಕ್ಯೂ\s?ಆರ್/i;
+const QR_WORDS: Record<string, number> = {
+  ten: 10,
+  twenty: 20,
+  fifty: 50,
+  hundred: 100,
+  das: 10,
+  bees: 20,
+  pachaas: 50,
+  sau: 100,
+  दस: 10,
+  बीस: 20,
+  पचास: 50,
+  सौ: 100,
+};
+function extractQrAmount(raw: string): number | null {
+  const t = raw.toLowerCase();
+  const cur = "(?:₹|rs\\.?|rupees?|rupaye|रुपये|रुपए|ரூபாய்|రూపాయలు|ರೂಪಾಯಿ)";
+  const m =
+    t.match(new RegExp(cur + "\\s*([0-9][0-9,]*)", "i")) ??
+    t.match(new RegExp("([0-9][0-9,]*)\\s*" + cur, "i")) ??
+    t.match(/\b([0-9][0-9,]*)\b/);
+  if (m) return parseInt(m[1].replace(/,/g, ""), 10);
+  for (const [w, n] of Object.entries(QR_WORDS)) {
+    if (new RegExp(`(^|\\s)${w}(\\s|$)`).test(t)) return n;
+  }
+  return null;
+}
+const QR_CREATING: Record<Lang, (amt: string) => string> = {
+  hi: (a) => `${a} का QR बना रहा हूँ। स्क्रीन पर दिखेगा।`,
+  en: (a) => `Creating a ${a} QR. It will appear on screen.`,
+  ta: (a) => `${a} QR உருவாக்குகிறேன். திரையில் தெரியும்.`,
+  te: (a) => `${a} QR తయారు చేస్తున్నాను. స్క్రీన్‌పై కనిపిస్తుంది.`,
+  kn: (a) => `${a} QR ರಚಿಸುತ್ತಿದ್ದೇನೆ. ಪರದೆಯಲ್ಲಿ ಕಾಣಿಸುತ್ತದೆ.`,
+};
+const QR_NEED_AMOUNT: Record<Lang, string> = {
+  hi: "कितने रुपये का QR बनाना है?",
+  en: "For how many rupees should I make the QR?",
+  ta: "எத்தனை ரூபாய்க்கு QR வேண்டும்?",
+  te: "ఎన్ని రూపాయలకు QR కావాలి?",
+  kn: "ಎಷ್ಟು ರೂಪಾಯಿಗೆ QR ಬೇಕು?",
+};
+
+// ── Payment summary / last payment ──
+const PAY_MENTION =
+  /payment|paise|paisa|received|collection|पेमेंट|पैसे|पैसा|भुगतान|பணம்|பேமெண்ட்|చెల్లింపు|పేమెంట్|ಪಾವತಿ|ಪೇಮೆಂಟ್/i;
+const NOT_PAY = /udhaar|udhar|khata|khate|loan|inventory|stock|उधार|खाता|लोन/i;
+const LAST_WORD =
+  /last|latest|recent|previous|pichla|pichli|aakhri|akhri|आखिरी|आख़िरी|पिछला|पिछली|கடைசி|చివరి|ಕೊನೆಯ/i;
+
+const AGO: Record<
+  Lang,
+  { now: string; min: (n: number) => string; hr: (n: number) => string }
+> = {
+  hi: {
+    now: "अभी अभी",
+    min: (n) => `${n} मिनट पहले`,
+    hr: (n) => `${n} घंटे पहले`,
+  },
+  en: {
+    now: "just now",
+    min: (n) => `${n} minutes ago`,
+    hr: (n) => `${n} hours ago`,
+  },
+  ta: {
+    now: "இப்போதுதான்",
+    min: (n) => `${n} நிமிடங்களுக்கு முன்`,
+    hr: (n) => `${n} மணி நேரத்திற்கு முன்`,
+  },
+  te: {
+    now: "ఇప్పుడే",
+    min: (n) => `${n} నిమిషాల క్రితం`,
+    hr: (n) => `${n} గంటల క్రితం`,
+  },
+  kn: {
+    now: "ಈಗಷ್ಟೇ",
+    min: (n) => `${n} ನಿಮಿಷಗಳ ಹಿಂದೆ`,
+    hr: (n) => `${n} ಗಂಟೆಗಳ ಹಿಂದೆ`,
+  },
+};
+function agoText(lang: Lang, ms: number): string {
+  const m = Math.round(ms / 60000);
+  if (m < 1) return AGO[lang].now;
+  if (m < 90) return AGO[lang].min(m);
+  return AGO[lang].hr(Math.round(m / 60));
+}
+const PAY_TODAY: Record<Lang, (total: string, count: number) => string> = {
+  hi: (t, c) => `आज अब तक ${c} पेमेंट में कुल ${t} आए हैं।`,
+  en: (t, c) => `So far today: ${t} across ${c} payments.`,
+  ta: (t, c) =>
+    `இன்று இதுவரை ${c} பணம் செலுத்தல்களில் மொத்தம் ${t} வந்துள்ளது.`,
+  te: (t, c) => `ఈ రోజు ఇప్పటివరకు ${c} చెల్లింపుల్లో మొత్తం ${t} వచ్చింది.`,
+  kn: (t, c) => `ಇಂದು ಇಲ್ಲಿಯವರೆಗೆ ${c} ಪಾವತಿಗಳಲ್ಲಿ ಒಟ್ಟು ${t} ಬಂದಿದೆ.`,
+};
+const PAY_LAST: Record<
+  Lang,
+  (amt: string, who: string, ago: string) => string
+> = {
+  hi: (a, w, g) => `आख़िरी पेमेंट ${a} का था, ${w} से, ${g}।`,
+  en: (a, w, g) => `The last payment was ${a} from ${w}, ${g}.`,
+  ta: (a, w, g) => `கடைசி பணம் ${a}, ${w} இடமிருந்து, ${g}.`,
+  te: (a, w, g) => `చివరి చెల్లింపు ${a}, ${w} నుండి, ${g}.`,
+  kn: (a, w, g) => `ಕೊನೆಯ ಪಾವತಿ ${a}, ${w} ಅವರಿಂದ, ${g}.`,
+};
+const PAY_NONE: Record<Lang, string> = {
+  hi: "अभी तक कोई पेमेंट नहीं आया है।",
+  en: "No payments received yet.",
+  ta: "இதுவரை எந்த பணமும் வரவில்லை.",
+  te: "ఇంకా ఏ చెల్లింపు రాలేదు.",
+  kn: "ಇನ್ನೂ ಯಾವುದೇ ಪಾವತಿ ಬಂದಿಲ್ಲ.",
+};
 
 /**
  * Multilingual intent router (deterministic, testable).
@@ -106,22 +230,55 @@ export function routeIntent(raw: string, lang: Lang = "hi"): Intent {
   const t = raw.toLowerCase().trim();
   const kw = INTENT_KEYWORDS[lang];
 
+  if (QR_MENTION.test(raw)) return "CREATE_QR";
+
   // ── Sensitive action: udhaar/credit update ──
   if (
     has(t, ...kw.udhaarUpdate) &&
-    (has(t, ...kw.udhaarQuery) || /(\d{2,6})/.test(t) || has(t, "update", "karo", "புதுப்பி", "అప్‌డేట్", "ಅಪ್‌ಡೇಟ್", "చెయ్యి", "ಮಾಡು", "மாற்று", "செய்"))
+    (has(t, ...kw.udhaarQuery) ||
+      /(\d{2,6})/.test(t) ||
+      has(
+        t,
+        "update",
+        "karo",
+        "புதுப்பி",
+        "అప్‌డేట్",
+        "ಅಪ್‌ಡೇಟ್",
+        "చెయ్యి",
+        "ಮಾಡು",
+        "மாற்று",
+        "செய்",
+      ))
   ) {
     return "UDHAAR_UPDATE";
   }
 
   // ── Win-back campaign ──
-  if (has(t, ...kw.winback) && (has(t, ...kw.customers) || has(t, "unko", "unhe", "அவர்களுக்கு", "వాళ్లకి", "ಅವರಿಗೆ", "அவங்க", "వాళ్ళు", "ಅವರು"))) {
+  if (
+    has(t, ...kw.winback) &&
+    (has(t, ...kw.customers) ||
+      has(
+        t,
+        "unko",
+        "unhe",
+        "அவர்களுக்கு",
+        "వాళ్లకి",
+        "ಅವರಿಗೆ",
+        "அவங்க",
+        "వాళ్ళు",
+        "ಅವರು",
+      ))
+  ) {
     return "CUSTOMER_WINBACK";
   }
-  if (has(t, "campaign", "win back", "winback", "wapas la")) return "CUSTOMER_WINBACK";
+  if (has(t, "campaign", "win back", "winback", "wapas la"))
+    return "CUSTOMER_WINBACK";
+
+  if (PAY_MENTION.test(raw) && !NOT_PAY.test(raw)) return "PAYMENT_EVENT";
 
   // ── Loan ──
-  if (has(t, ...kw.loan) && !has(t, ...kw.udhaarQuery)) return "LOAN_RECOMMENDATION";
+  if (has(t, ...kw.loan) && !has(t, ...kw.udhaarQuery))
+    return "LOAN_RECOMMENDATION";
 
   // ── Udhaar (credit) query ──
   if (has(t, ...kw.udhaarQuery)) return "UDHAAR_QUERY";
@@ -135,7 +292,8 @@ export function routeIntent(raw: string, lang: Lang = "hi"): Intent {
   // ── Customers ──
   // "Who hasn't come in N days?" often omits the word "customer" entirely —
   // detect the inactive-phrasing directly (works in all 5 languages).
-  if (has(t, ...kw.customers) || has(t, ...kw.inactive)) return "CUSTOMER_INSIGHT";
+  if (has(t, ...kw.customers) || has(t, ...kw.inactive))
+    return "CUSTOMER_INSIGHT";
 
   // ── Approval (voice "yes") ──
   if (has(t, ...kw.approve)) return "APPROVE_ACTION";
@@ -152,21 +310,41 @@ export function routeIntent(raw: string, lang: Lang = "hi"): Intent {
 
 /** Secondary English-keyword pass for mixed-language utterances. */
 function routeIntentEnFb(t: string): Intent {
-  if (has(t, "udhaar") && has(t, "update", "karo", "kam", "add", "jodo", "deduct", "repay")) return "UDHAAR_UPDATE";
+  if (
+    has(t, "udhaar") &&
+    has(t, "update", "karo", "kam", "add", "jodo", "deduct", "repay")
+  )
+    return "UDHAAR_UPDATE";
   if (has(t, "offer", "coupon", "campaign")) return "CUSTOMER_WINBACK";
   if (has(t, "loan", "credit")) return "LOAN_RECOMMENDATION";
   if (has(t, "udhaar", "khata")) return "UDHAAR_QUERY";
   if (has(t, "stock", "inventory", "maal", "saman")) return "INVENTORY_QUERY";
-  if (has(t, "kitni sale", "kitna business", "aaj ka", "today", "sales", "business kaisa", "business hua", "summary")) return "SALES_QUERY";
+  if (
+    has(
+      t,
+      "kitni sale",
+      "kitna business",
+      "aaj ka",
+      "today",
+      "sales",
+      "business kaisa",
+      "business hua",
+      "summary",
+    )
+  )
+    return "SALES_QUERY";
   if (has(t, "customer")) return "CUSTOMER_INSIGHT";
-  if (has(t, "haan", "yes", "confirm", "approve", "ok")) return "APPROVE_ACTION";
+  if (has(t, "haan", "yes", "confirm", "approve", "ok"))
+    return "APPROVE_ACTION";
   if (has(t, "payment", "aaya", "received", "paisa")) return "PAYMENT_EVENT";
   return "UNKNOWN";
 }
 
 function extractDays(t: string): number {
   const m =
-    t.match(/(\d+)\s*(din|day|days|dino|நாள்|நாட்கள்|రోజు|రోజులు|ದಿನ|ದಿನಗಳು)/) ??
+    t.match(
+      /(\d+)\s*(din|day|days|dino|நாள்|நாட்கள்|రోజు|రోజులు|ದಿನ|ದಿನಗಳು)/,
+    ) ??
     t.match(/(?:நாட்களாக|రోజులుగా|ದಿನವಾಗಿ)\s*(\d+)/) ??
     t.match(/(\d+)\s*(?:நாட்கள|రోజుల|ದಿನಗಳ)/);
   if (m) return Math.max(1, parseInt(m[1], 10));
@@ -178,8 +356,12 @@ function extractDays(t: string): number {
 
 function extractAmount(t: string): number | null {
   const m =
-    t.match(/(?:₹|rs\.?|rupees|rupaye|ரூபாய்|రూపాయలు|ರೂಪಾಯಿ)\s*([0-9][0-9,]*)/i) ??
-    t.match(/([0-9][0-9,]*)\s*(?:₹|rs\.?|rupaye|rupees|ரூபாய்|రూపాయలు|ರೂಪಾಯಿ)/i);
+    t.match(
+      /(?:₹|rs\.?|rupees|rupaye|ரூபாய்|రూపాయలు|ರೂಪಾಯಿ)\s*([0-9][0-9,]*)/i,
+    ) ??
+    t.match(
+      /([0-9][0-9,]*)\s*(?:₹|rs\.?|rupaye|rupees|ரூபாய்|రూపాయలు|ರೂಪಾಯಿ)/i,
+    );
   if (m) return parseInt(m[1].replace(/,/g, ""), 10);
   // Native-script utterances usually place the bare number before the currency word
   const native = t.match(/(\d{2,6})\s*[^\x00-\x7F]/);
@@ -189,7 +371,10 @@ function extractAmount(t: string): number | null {
 }
 
 /** Resolve a customer name from any language (native script → canonical). */
-export function extractCustomerName(raw: string, lang: Lang = "hi"): string | null {
+export function extractCustomerName(
+  raw: string,
+  lang: Lang = "hi",
+): string | null {
   const t = raw.toLowerCase();
 
   // 1) Native-script alias → canonical English first name.
@@ -203,8 +388,29 @@ export function extractCustomerName(raw: string, lang: Lang = "hi"): string | nu
     t.match(/(?:for|of)\s+([a-z]+(?:\s[a-z]+)?)/);
   if (m) {
     const stop = new Set([
-      "aaj", "kal", "milk", "stock", "udhaar", "udhar", "kitna", "kitne", "update", "offer", "payment",
-      "te", "thi", "palu", "paal", "haalu", "enna", "kya", "kadan", "appu", "saala", "khata", "khate",
+      "aaj",
+      "kal",
+      "milk",
+      "stock",
+      "udhaar",
+      "udhar",
+      "kitna",
+      "kitne",
+      "update",
+      "offer",
+      "payment",
+      "te",
+      "thi",
+      "palu",
+      "paal",
+      "haalu",
+      "enna",
+      "kya",
+      "kadan",
+      "appu",
+      "saala",
+      "khata",
+      "khate",
     ]);
     const candidate = m[1].trim();
     if (!stop.has(candidate)) {
@@ -216,8 +422,28 @@ export function extractCustomerName(raw: string, lang: Lang = "hi"): string | nu
   }
 
   // 3) Known first names anywhere in the utterance.
-  const known = ["ramesh", "suresh", "anita", "vijay", "pooja", "amit", "kavita", "irfan", "lakhan", "deepak", "sunita", "rahul", "manoj", "rekha", "harish", "gopal", "neelam", "shankar"];
-  for (const k of known) if (t.includes(k)) return k.charAt(0).toUpperCase() + k.slice(1);
+  const known = [
+    "ramesh",
+    "suresh",
+    "anita",
+    "vijay",
+    "pooja",
+    "amit",
+    "kavita",
+    "irfan",
+    "lakhan",
+    "deepak",
+    "sunita",
+    "rahul",
+    "manoj",
+    "rekha",
+    "harish",
+    "gopal",
+    "neelam",
+    "shankar",
+  ];
+  for (const k of known)
+    if (t.includes(k)) return k.charAt(0).toUpperCase() + k.slice(1);
 
   void lang;
   return null;
@@ -227,26 +453,51 @@ export function extractCustomerName(raw: string, lang: Lang = "hi"): string | nu
 export function extractProduct(raw: string, lang: Lang = "hi"): string | null {
   // 1) Native/romanized alias → canonical seeded product.
   for (const [alias, canonical] of Object.entries(PRODUCT_ALIASES)) {
-    if (raw.toLowerCase().includes(alias.toLowerCase()) && /[\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF]/.test(raw)) {
+    if (
+      raw.toLowerCase().includes(alias.toLowerCase()) &&
+      /[\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF]/.test(raw)
+    ) {
       return canonical;
     }
   }
 
   const t = raw.toLowerCase();
   // 2) Known English catalogue keywords (most reliable path).
-  const known = ["milk", "bread", "egg", "rice", "atta", "wheat", "dal", "oil", "sugar", "tea", "biscuit", "detergent", "soap", "shampoo", "butter", "curd", "flour"];
+  const known = [
+    "milk",
+    "bread",
+    "egg",
+    "rice",
+    "atta",
+    "wheat",
+    "dal",
+    "oil",
+    "sugar",
+    "tea",
+    "biscuit",
+    "detergent",
+    "soap",
+    "shampoo",
+    "butter",
+    "curd",
+    "flour",
+  ];
   for (const k of known) if (t.includes(k)) return k;
 
   // 3) Romanized South-Indian product words.
   for (const [alias, canonical] of Object.entries(PRODUCT_ALIASES)) {
-    if (/^[a-z]+$/i.test(alias) && new RegExp(`\\b${alias}\\b`).test(t)) return canonical;
+    if (/^[a-z]+$/i.test(alias) && new RegExp(`\\b${alias}\\b`).test(t))
+      return canonical;
   }
 
   // 4) Generic "X ka stock" extraction.
-  const m = t.match(/(?:ka|ki|of|kitna|kitne|சரக்கு|స్టాక్|ಸ್ಟಾಕ್)\s+([a-z][a-z0-9 ()\-]*?)\s*(?:ka|ki|kitna|kitne|stock|hai|left|bacha|$)/);
+  const m = t.match(
+    /(?:ka|ki|of|kitna|kitne|சரக்கு|స్టాక్|ಸ್ಟಾಕ್)\s+([a-z][a-z0-9 ()\-]*?)\s*(?:ka|ki|kitna|kitne|stock|hai|left|bacha|$)/,
+  );
   if (m) {
     const cand = m[1].trim();
-    const stop = /^(kitna|kitne|kya|sab|kaisa|stock|saman|maal|udhaar|udhar|offer)$/;
+    const stop =
+      /^(kitna|kitne|kya|sab|kaisa|stock|saman|maal|udhaar|udhar|offer)$/;
     if (cand && !stop.test(cand)) return cand;
   }
 
@@ -256,7 +507,11 @@ export function extractProduct(raw: string, lang: Lang = "hi"): string | null {
 
 /** Random hex id for pending actions. */
 const actionId = () =>
-  Array.from({ length: 4 }, () => Math.floor(Math.random() * 0xffff).toString(16).padStart(4, "0")).join("");
+  Array.from({ length: 4 }, () =>
+    Math.floor(Math.random() * 0xffff)
+      .toString(16)
+      .padStart(4, "0"),
+  ).join("");
 
 // ───────────────────────── AGENT ENGINE ─────────────────────────
 
@@ -275,7 +530,10 @@ export async function runAgent(
   const lang: Lang = isLang(langInput) ? langInput : "hi";
   const intent = routeIntent(userInput, lang);
   const t = userInput.toLowerCase();
-  const R = (tpl: Record<Lang, (...a: any[]) => string>) => (...a: unknown[]) => tpl[lang](...a);
+  const R =
+    (tpl: Record<Lang, (...a: any[]) => string>) =>
+    (...a: unknown[]) =>
+      tpl[lang](...a);
   let tool = "unknown";
   let response = "";
   let success = true;
@@ -298,8 +556,36 @@ export async function runAgent(
         break;
       }
 
+      case "CREATE_QR": {
+        tool = "create_qr";
+        const amount = extractQrAmount(userInput);
+        if (!amount || amount < 1 || amount > 100000) {
+          response = QR_NEED_AMOUNT[lang];
+          success = false;
+          break;
+        }
+        await ctx.scheduler.runAfter(0, internal.razorpay.createQrFromAgent, {
+          amount,
+        });
+        response = QR_CREATING[lang](inr(amount));
+        break;
+      }
+
       case "CUSTOMER_INSIGHT": {
-        if (has(t, "nahi aaye", "nahi aaya", "inactive", "gayab", "வரவில்லை", "రాలేదు", "రాని", "ಬಂದಿಲ್ಲ", "ಬಾರದ")) {
+        if (
+          has(
+            t,
+            "nahi aaye",
+            "nahi aaya",
+            "inactive",
+            "gayab",
+            "வரவில்லை",
+            "రాలేదు",
+            "రాని",
+            "ಬಂದಿಲ್ಲ",
+            "ಬಾರದ",
+          )
+        ) {
           tool = "get_inactive_customers";
           const days = extractDays(t);
           const r = await getInactiveCustomers(ctx, merchantId, days);
@@ -307,7 +593,10 @@ export async function runAgent(
             ? R(INACTIVE_LIST)(
                 r.count,
                 days,
-                r.customers.slice(0, 3).map((c) => `${c.name} (${c.daysSince})`).join(", "),
+                r.customers
+                  .slice(0, 3)
+                  .map((c) => `${c.name} (${c.daysSince})`)
+                  .join(", "),
               )
             : R(NO_INACTIVE)(days);
         } else {
@@ -339,7 +628,12 @@ export async function runAgent(
         await ctx.db.insert("pendingActions", {
           merchantId,
           actionType: "create_campaign",
-          payload: { days, offer, customerNames: r.customers.map((c) => c.name), actionId: actionIdStr },
+          payload: {
+            days,
+            offer,
+            customerNames: r.customers.map((c) => c.name),
+            actionId: actionIdStr,
+          },
           summary: R(WINBACK_PENDING_SUMMARY)(offer, r.count),
           status: "pending",
           expiresAt: Date.now() + 10 * 60 * 1000,
@@ -352,7 +646,10 @@ export async function runAgent(
           detail: R(WINBACK_PENDING_DETAIL)(
             r.count,
             days,
-            r.customers.slice(0, 5).map((c) => c.name).join(", ") + (r.count > 5 ? "…" : ""),
+            r.customers
+              .slice(0, 5)
+              .map((c) => c.name)
+              .join(", ") + (r.count > 5 ? "…" : ""),
             offer,
           ),
           confirmLabel: R(WINBACK_CONFIRM_LABEL)(r.count),
@@ -371,7 +668,11 @@ export async function runAgent(
             response = R(PRODUCT_NOT_FOUND)(product);
             success = false;
           } else if (p.quantity <= p.reorderLevel) {
-            response = R(PRODUCT_LOW)(p.productName, p.quantity, p.reorderLevel);
+            response = R(PRODUCT_LOW)(
+              p.productName,
+              p.quantity,
+              p.reorderLevel,
+            );
           } else {
             response = R(PRODUCT_OK)(p.productName, p.quantity, `₹${p.price}`);
           }
@@ -382,7 +683,10 @@ export async function runAgent(
             ? R(INVENTORY_LOW_LIST)(
                 inv.totalProducts,
                 inv.lowStockCount,
-                inv.lowStock.slice(0, 3).map((p) => `${p.name} (${p.qty})`).join(", "),
+                inv.lowStock
+                  .slice(0, 3)
+                  .map((p) => `${p.name} (${p.qty})`)
+                  .join(", "),
               )
             : R(INVENTORY_ALL_OK)(inv.totalProducts);
         }
@@ -397,9 +701,16 @@ export async function runAgent(
           response = R(CUSTOMER_NOT_FOUND)(name);
           success = false;
         } else if (name && "balance" in r) {
-          response = R(UDHAAR_BALANCE_ONE)((r as { name: string }).name, inr((r as { balance: number }).balance));
+          response = R(UDHAAR_BALANCE_ONE)(
+            (r as { name: string }).name,
+            inr((r as { balance: number }).balance),
+          );
         } else {
-          const rr = r as { total: number; customerCount: number; top: { name: string; amount: number }[] };
+          const rr = r as {
+            total: number;
+            customerCount: number;
+            top: { name: string; amount: number }[];
+          };
           response = R(UDHAAR_TOTAL)(
             inr(rr.total),
             rr.customerCount,
@@ -440,7 +751,10 @@ export async function runAgent(
           actionId: actionIdStr,
           actionType: "udhaar_update",
           summary: R(UDHAAR_PENDING_SUMMARY)(balOk.name, inr(amount)),
-          detail: R(UDHAAR_PENDING_DETAIL)(inr(balOk.balance), inr(Math.max(0, balOk.balance - amount))),
+          detail: R(UDHAAR_PENDING_DETAIL)(
+            inr(balOk.balance),
+            inr(Math.max(0, balOk.balance - amount)),
+          ),
           confirmLabel: R(UDHAAR_CONFIRM_LABEL)(inr(amount)),
           payload: {},
         };
@@ -459,16 +773,32 @@ export async function runAgent(
       }
 
       case "PAYMENT_EVENT": {
-        tool = "get_today_sales";
+        tool = "get_payment_summary";
         const s = await getTodaySales(ctx, merchantId);
-        response = R(PAYMENT_PRIORITY)(inr(s.todaySales), s.topMethod ?? "UPI");
+        const last = await ctx.db
+          .query("paymentEvents")
+          .withIndex("by_merchant_time", (q) => q.eq("merchantId", merchantId))
+          .order("desc")
+          .first();
+        const lastLine = last
+          ? PAY_LAST[lang](
+              inr(last.amount),
+              last.customerReference,
+              agoText(lang, Date.now() - last.createdAt),
+            )
+          : PAY_NONE[lang];
+        response = LAST_WORD.test(userInput)
+          ? lastLine
+          : `${PAY_TODAY[lang](inr(s.todaySales), s.txnCount)} ${lastLine}`;
         break;
       }
 
       case "APPROVE_ACTION": {
         const pend = await ctx.db
           .query("pendingActions")
-          .withIndex("by_merchant_status", (q) => q.eq("merchantId", merchantId).eq("status", "pending"))
+          .withIndex("by_merchant_status", (q) =>
+            q.eq("merchantId", merchantId).eq("status", "pending"),
+          )
           .order("desc")
           .first();
         if (!pend) {
@@ -477,7 +807,9 @@ export async function runAgent(
           break;
         }
         pendingAction = {
-          actionId: (pend.payload as { actionId?: string }).actionId ?? pend._id.slice(-8),
+          actionId:
+            (pend.payload as { actionId?: string }).actionId ??
+            pend._id.slice(-8),
           actionType: pend.actionType as "udhaar_update" | "create_campaign",
           summary: pend.summary,
           detail: R(APPROVE_PENDING_DETAIL)(),

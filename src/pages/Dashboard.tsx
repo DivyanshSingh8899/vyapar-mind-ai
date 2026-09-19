@@ -1,4 +1,7 @@
-import { AgentActivityPanel, PaymentsPanel } from "@/components/vyapar/ActivityPanels";
+import {
+  AgentActivityPanel,
+  PaymentsPanel,
+} from "@/components/vyapar/ActivityPanels";
 import { DemoModeBar } from "@/components/vyapar/DemoModeBar";
 import { SoundboxSimulator } from "@/components/vyapar/SoundboxSimulator";
 import { ConversationPanel } from "@/components/vyapar/ConversationPanel";
@@ -21,17 +24,27 @@ import { useVyaparAgent } from "@/hooks/useVyaparAgent";
 import { api } from "@/convex/_generated/api";
 import { LANGS, LANG_CODES, type Lang } from "@/convex/langs";
 import { useMutation, useQuery } from "convex/react";
-import { BellRing, CircleStop, Languages, LogOut, Radio, ShieldCheck, Sparkles } from "lucide-react";
+import {
+  BellRing,
+  CircleStop,
+  Languages,
+  LogOut,
+  Radio,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import GenerateQr from "@/components/GenerateQr";
 import { cn } from "@/lib/utils";
+import { usePaymentAnnouncer } from "@/hooks/usePaymentAnnouncer";
 
 export default function Dashboard() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const data = useQuery(api.vyapar.getDashboard);
   const agent = useVyaparAgent();
+  usePaymentAnnouncer(agent.lang);
   const reseed = useMutation(api.vyapar.reseedDemoMerchant);
   const [activeDemo, setActiveDemo] = useState<string | null>(null);
 
@@ -69,14 +82,19 @@ export default function Dashboard() {
               <h1 className="text-lg font-extrabold tracking-tight text-slate-900">
                 Paytm <span className="text-gradient">Vyapar-Mind</span>
               </h1>
-              <Badge className="hidden border-indigo-200 bg-indigo-50/80 text-[10px] font-bold text-indigo-700 sm:inline-flex" variant="secondary">
+              <Badge
+                className="hidden border-indigo-200 bg-indigo-50/80 text-[10px] font-bold text-indigo-700 sm:inline-flex"
+                variant="secondary"
+              >
                 AI Hackathon 2026 · Prototype
               </Badge>
             </div>
             <p className="text-xs text-muted-foreground">
               {data ? (
                 <>
-                  {data.merchant.businessName} · <span className="font-mono">{data.merchant.id}</span> · {data.merchant.city}
+                  {data.merchant.businessName} ·{" "}
+                  <span className="font-mono">{data.merchant.id}</span> ·{" "}
+                  {data.merchant.city}
                 </>
               ) : (
                 "Loading merchant…"
@@ -96,18 +114,24 @@ export default function Dashboard() {
                 {LANGS[agent.lang].native}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="rounded-xl border-white/60 bg-white/95 backdrop-blur">
+            <DropdownMenuContent
+              align="end"
+              className="rounded-xl border-white/60 bg-white/95 backdrop-blur"
+            >
               {LANG_CODES.map((code: Lang) => (
                 <DropdownMenuItem
                   key={code}
                   onClick={() => agent.setLang(code)}
                   className={cn(
                     "gap-2",
-                    agent.lang === code && "bg-indigo-50 font-semibold text-indigo-700",
+                    agent.lang === code &&
+                      "bg-indigo-50 font-semibold text-indigo-700",
                   )}
                 >
                   <span className="w-16">{LANGS[code].native}</span>
-                  <span className="text-xs text-muted-foreground">{LANGS[code].label}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {LANGS[code].label}
+                  </span>
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
@@ -119,7 +143,13 @@ export default function Dashboard() {
             <BellRing className="size-4" />
             SIMULATE PAYMENT
           </Button>
-          <Button variant="outline" size="icon" className="rounded-full border-white/70 bg-white/60" onClick={handleSignOut} title={user?.email ?? "Sign out"}>
+          <Button
+            variant="outline"
+            size="icon"
+            className="rounded-full border-white/70 bg-white/60"
+            onClick={handleSignOut}
+            title={user?.email ?? "Sign out"}
+          >
             <LogOut className="size-4" />
           </Button>
         </div>
@@ -162,10 +192,13 @@ export default function Dashboard() {
       {/* ── Voice-first message ── */}
       <p className="mt-5 flex items-center justify-center gap-2 text-center text-xs text-muted-foreground">
         <Radio className="size-3.5 text-indigo-400" />
-        Merchant ko dashboard kholne ki zaroorat nahi — bas boliye. Dashboard sirf backup hai.
+        Merchant ko dashboard kholne ki zaroorat nahi — bas boliye. Dashboard
+        sirf backup hai.
       </p>
 
-      <GenerateQr/>
+      <section className="mt-4">
+        <GenerateQr />
+      </section>
 
       {/* ── Business panels ── */}
       {!data ? (
@@ -188,10 +221,12 @@ export default function Dashboard() {
       {/* ── Footer ── */}
       <footer className="mt-8 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-center text-[11px] text-muted-foreground">
         <span className="flex items-center gap-1">
-          <ShieldCheck className="size-3 text-indigo-400" /> Sensitive actions need merchant PIN
+          <ShieldCheck className="size-3 text-indigo-400" /> Sensitive actions
+          need merchant PIN
         </span>
         <span className="flex items-center gap-1">
-          <CircleStop className="size-3 text-rose-400" /> Demo data only — no private Paytm APIs
+          <CircleStop className="size-3 text-rose-400" /> Demo data only — no
+          private Paytm APIs
         </span>
         <span>Voice: Web Speech API (Sarvam-ready adapter)</span>
         <span className="font-mono">M001 · Ramesh General Store · Indore</span>

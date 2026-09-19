@@ -11,7 +11,7 @@ dist-ssr
 !.env.example
 
 # generated
-src/convex/_generated
+# src/convex/_generated
 
 # logs
 *.log
