@@ -154,7 +154,6 @@ export function useVyaparAgent() {
     async (text: string, source: "voice" | "text" | "demo") => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      const selectedLang = langRef.current;
       setError(null);
       setPartial("");
       setMessages((prev) => [
@@ -163,7 +162,7 @@ export function useVyaparAgent() {
       ]);
       setState("PROCESSING");
       try {
-        const res = await sendTurn({ text: trimmed, source, lang: selectedLang });
+        const res = await sendTurn({ text: trimmed, source, lang: langRef.current });
         setLastTurn({ intent: res.intent, tool: res.tool, latencyMs: res.latencyMs });
         setMessages((prev) => [
           ...prev,
@@ -195,7 +194,7 @@ export function useVyaparAgent() {
           if (sarvamTtsOn) {
             // Try premium Sarvam TTS first; silently fall back to browser TTS.
             try {
-              const tts = await sarvamTtsAction({ text: res.response, language: LANGS[selectedLang].sarvamTts });
+              const tts = await sarvamTtsAction({ text: res.response, language: LANGS[langRef.current].sarvamTts });
               if (tts.available && tts.audioBase64 && playBase64Audio(tts.audioBase64, done)) {
                 window.setTimeout(done, 20000);
                 return;
@@ -204,7 +203,7 @@ export function useVyaparAgent() {
               /* fall through to browser TTS */
             }
           }
-          speak(res.response, LANGS[selectedLang].locale, done);
+          speak(res.response, LANGS[langRef.current].locale, done);
           window.setTimeout(done, Math.min(15000, 4000 + res.response.length * 60));
         }
       } catch {

@@ -79,7 +79,10 @@ export default function Landing() {
       {/* Hero */}
       <section className="mx-auto mt-10 grid w-full max-w-6xl items-center gap-10 px-4 sm:px-6 lg:mt-16 lg:grid-cols-2">
         <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
-          <h1 className="text-4xl font-extrabold leading-[1.08] tracking-tight text-slate-900 sm:text-5xl">
+          <Badge className="border-indigo-200 bg-white/60 text-indigo-700" variant="secondary">
+            <BrainCircuit className="mr-1 size-3.5" /> Paytm AI Hackathon 2026 · Merchant Growth AI
+          </Badge>
+          <h1 className="mt-4 text-4xl font-extrabold leading-[1.08] tracking-tight text-slate-900 sm:text-5xl">
             The Soundbox that <span className="text-gradient">talks back.</span>
           </h1>
           <p className="mt-4 max-w-lg text-base leading-7 text-slate-600">
@@ -97,6 +100,10 @@ export default function Landing() {
               <Link to="/auth">Sign in as merchant</Link>
             </Button>
           </div>
+          <p className="mt-4 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <ShieldCheck className="size-3.5 text-indigo-400" />
+            Hackathon prototype · simulated data · no private Paytm APIs
+          </p>
         </motion.div>
 
         {/* Voice-flow glass card */}
